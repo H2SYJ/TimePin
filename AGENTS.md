@@ -69,7 +69,7 @@ timepin/
 - 主色调：中性灰 + 单一品牌色（蓝色系 `primary`）
 - 圆角：`rounded-lg` (8px) 为基础，卡片 `rounded-xl` (12px)，按钮 `rounded-md` (6px)
 - 间距：基于 4px 网格（`gap-4`、`p-4`、`m-4` 等）
-- 字体：系统字体栈，中文优先 `font-sans`
+- 字体：统一 `JetBrains Mono`，中文优先 `font-sans`
 
 ## 铁律（不可违反）
 1. **默认绝不修改原 MP4**；只有用户显式选择「内嵌章节」时才允许写回，且必须先提示备份
