@@ -90,7 +90,11 @@ mod tests {
     #[test]
     fn finds_binary_in_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+        let name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
         let path = dir.path().join(name);
         std::fs::write(&path, b"").expect("write");
         assert_eq!(existing_candidate(dir.path(), "ffmpeg"), Some(path));

@@ -1,0 +1,29 @@
+{
+  "protocolVersion": "1.0.0",
+  "name": "example-template-match",
+  "version": "0.1.0",
+  "description": "示例插件：演示 TimePin 插件协议（JSON-RPC over stdio）。读取视频元数据，按参数在时间轴上生成演示标注，并把接收到的参数原样写入证据文件。真实模板匹配（OpenCV）将在 M3 GUI 识别工具中提供。",
+  "author": "TimePin Team",
+  "entry": "main.py",
+  "runtime": "python",
+  "capabilities": ["metadata", "fileWrite"],
+  "parametersSchema": {
+    "intervalSeconds": {
+      "type": "number",
+      "title": "标注间隔（秒）",
+      "description": "每隔多少秒生成一个演示标注点",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 600
+    },
+    "label": {
+      "type": "string",
+      "title": "标注前缀",
+      "default": "示例标注"
+    }
+  },
+  "outputSchema": {
+    "marks": "Mark[] — 时间点标注，startTime=间隔倍数，label=前缀+序号",
+    "evidence": "evidence/params.json — 回显的运行参数"
+  }
+}

@@ -1,3 +1,4 @@
+use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -5,6 +6,22 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             crate::core::init(app.handle())?;
+
+            // 插件管理器：扫描内置 plugins/ + 设置中的 customPluginDirs。
+            // 只发现与校验，进程在执行首个任务时懒启动。
+            let plugin_dirs =
+                crate::plugins::manager::PluginManager::builtin_plugin_dirs(app.handle())
+                    .into_iter()
+                    .chain(
+                        crate::core::settings::load_settings(app.handle())
+                            .map(|s| s.custom_plugin_dirs)
+                            .unwrap_or_default(),
+                    )
+                    .collect::<Vec<_>>();
+            let manager =
+                crate::plugins::manager::PluginManager::discover(app.handle(), &plugin_dirs);
+            app.manage(manager);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -18,6 +35,11 @@ pub fn run() {
             crate::commands::formats::generate_txt_chapters,
             crate::commands::formats::generate_csv_markers,
             crate::commands::formats::export_segments,
+            crate::commands::plugins::get_plugins,
+            crate::commands::plugins::reload_plugins,
+            crate::commands::plugins::run_plugin,
+            crate::commands::plugins::stop_plugin,
+            crate::commands::plugins::cancel_plugin_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

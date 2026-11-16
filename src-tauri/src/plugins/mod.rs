@@ -1,21 +1,15 @@
-//! 插件系统 - 为 M2 预留接口
+//! 插件系统（M2）
 //!
-//! M1 阶段不实现具体插件，仅定义模块结构
+//! - `manifest`：plugin.json 清单结构与校验
+//! - `protocol`：JSON-RPC over stdio 协议类型（版本化）
+//! - `runtime`：Sidecar 进程运行时（spawn / handshake / call / 通知分发）
+//! - `manager`：生命周期管理（发现→校验→启动→执行→回收），崩溃恢复与结果合并
 
+pub mod manager;
 pub mod manifest;
 pub mod protocol;
+pub mod runtime;
 
-/// 插件管理器（M2 实现）
-pub struct PluginManager;
-
-impl PluginManager {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for PluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use manager::{PluginError, PluginInfo, PluginManager, PluginRunFinished};
+pub use manifest::{PluginCapability, PluginManifest, PluginRuntime};
+pub use protocol::{PluginResult, PROTOCOL_VERSION};

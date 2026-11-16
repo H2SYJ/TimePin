@@ -1,11 +1,12 @@
-import { Film, FolderOpen, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { Film, FolderOpen, Settings as SettingsIcon, Sparkles, Puzzle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/stores/app';
 
-type Page = 'library' | 'settings';
+type Page = 'library' | 'plugins' | 'settings';
 
 const navigation: Array<{ page: Page; label: string; icon: typeof Film }> = [
   { page: 'library', label: '媒体库', icon: FolderOpen },
+  { page: 'plugins', label: '插件管理', icon: Puzzle },
   { page: 'settings', label: '软件设置', icon: SettingsIcon },
 ];
 

@@ -46,11 +46,7 @@ pub fn export_segments(
         let start_time = mark.start_time;
         let duration = end_time - start_time;
 
-        if !start_time.is_finite()
-            || !end_time.is_finite()
-            || start_time < 0.0
-            || duration <= 0.0
-        {
+        if !start_time.is_finite() || !end_time.is_finite() || start_time < 0.0 || duration <= 0.0 {
             continue;
         }
 
@@ -58,7 +54,8 @@ pub fn export_segments(
         let output_filename = format!("{}_{:03}_{}.mp4", video_stem, index + 1, safe_label);
         let output_path = output_dir.join(output_filename);
 
-        let ffmpeg_args = build_ffmpeg_args(video_path, start_time, end_time, &output_path, export_mode)?;
+        let ffmpeg_args =
+            build_ffmpeg_args(video_path, start_time, end_time, &output_path, export_mode)?;
 
         let output = Command::new(&ffmpeg).args(&ffmpeg_args).output()?;
 
@@ -121,10 +118,7 @@ fn sanitize_filename(name: &str) -> String {
         .take(50)
         .collect();
 
-    let cleaned = cleaned
-        .trim()
-        .trim_end_matches(|character| character == '.' || character == ' ')
-        .to_string();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
     if cleaned.is_empty() {
         "clip".to_string()
     } else {

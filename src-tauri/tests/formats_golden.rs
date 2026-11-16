@@ -27,17 +27,23 @@ fn sample_marks() -> Vec<Mark> {
     ]
 }
 
+/// Golden files 在 Windows 上可能被 git 转为 CRLF；生成器固定输出 LF，
+/// 所以比较前统一归一化。
+fn normalized(content: &str) -> String {
+    content.replace("\r\n", "\n").trim_end().to_string()
+}
+
 #[test]
 fn txt_matches_golden_file() {
     let actual = generate_txt_chapters(&sample_marks(), 60.0).expect("txt");
-    let expected = include_str!("fixtures/sample_video.txt").trim_end();
+    let expected = normalized(include_str!("fixtures/sample_video.txt"));
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn csv_matches_golden_file() {
     let actual = generate_csv_markers(&sample_marks(), 60.0).expect("csv");
-    let expected = include_str!("fixtures/sample_video.csv").trim_end();
+    let expected = normalized(include_str!("fixtures/sample_video.csv"));
     assert_eq!(actual, expected);
 }
 
@@ -66,12 +72,8 @@ fn csv_has_fixed_header() {
 #[test]
 fn xml_uses_fcp7_xmeml_and_escapes_labels() {
     let marks = vec![mark("m1", 1.0, Some(2.0), "Boss & \"阶段\"")];
-    let actual = generate_fcp7_xml(
-        &marks,
-        &PathBuf::from(r"C:\Videos\测试 & 片段.mp4"),
-        10.0,
-    )
-    .expect("xml");
+    let actual =
+        generate_fcp7_xml(&marks, &PathBuf::from(r"C:\Videos\测试 & 片段.mp4"), 10.0).expect("xml");
 
     assert!(actual.contains("<xmeml version=\"4\">"));
     assert!(actual.contains("Boss &amp; &quot;阶段&quot;"));

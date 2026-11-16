@@ -207,10 +207,7 @@ pub fn get_video_by_id(
 /// 从媒体库移除视频及其副本、缩略图和伴随文件。
 ///
 /// 原始视频（`source_path`）不会被删除。
-pub fn delete_video(
-    app_handle: &AppHandle,
-    id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn delete_video(app_handle: &AppHandle, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut videos = get_videos(app_handle)?;
     if let Some(index) = videos.iter().position(|video| video.id == id) {
         let video = videos.remove(index);
@@ -225,15 +222,16 @@ pub fn delete_video(
             }
         }
 
-        for sidecar in [
+        for path in [
             &video.sidecar_txt_path,
             &video.sidecar_csv_path,
             &video.sidecar_xml_path,
-        ] {
-            if let Some(path) = sidecar {
-                if path.exists() {
-                    std::fs::remove_file(path)?;
-                }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if path.exists() {
+                std::fs::remove_file(path)?;
             }
         }
 
@@ -349,9 +347,7 @@ pub fn get_video_metadata(
 
     let message = match probe_error {
         Some(error) => format!("无法读取视频元数据：{error}"),
-        None => {
-            "无法读取视频元数据：未找到 ffprobe，且该文件不是可解析的 MP4/MOV".to_string()
-        }
+        None => "无法读取视频元数据：未找到 ffprobe，且该文件不是可解析的 MP4/MOV".to_string(),
     };
     Err(message.into())
 }
@@ -452,7 +448,7 @@ pub fn generate_thumbnail(
     let thumbnail_path = thumbnails_dir.join(format!("{video_id}.jpg"));
 
     let settings = load_settings(app_handle).unwrap_or_default();
-    let max_dimension = u32::from(settings.thumbnail_max_dimension.clamp(64, 1920));
+    let max_dimension = settings.thumbnail_max_dimension.clamp(64, 1920);
     let quality = u32::from(settings.thumbnail_quality.clamp(1, 100));
     let qscale = (31.0 - (quality as f64 / 100.0) * 29.0)
         .round()
@@ -472,7 +468,14 @@ pub fn generate_thumbnail(
         .arg(format!("{seek_time:.3}"))
         .arg("-i")
         .arg(video_path)
-        .args(["-frames:v", "1", "-vf", &scale_filter, "-q:v", &qscale.to_string()])
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            &scale_filter,
+            "-q:v",
+            &qscale.to_string(),
+        ])
         .arg(&thumbnail_path)
         .output()?;
 

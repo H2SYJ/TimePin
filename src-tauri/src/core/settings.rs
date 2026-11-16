@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 use crate::core::get_app_data_dir;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -34,31 +34,23 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum ExportMode {
     /// 流复制模式（默认，极快，无损）
+    #[default]
     StreamCopy,
     /// 帧精确模式（对首尾 GOP 重编码）
     FrameAccurate,
 }
 
-impl Default for ExportMode {
-    fn default() -> Self {
-        ExportMode::StreamCopy
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Theme {
     Light,
     Dark,
+    #[default]
     System,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::System
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,7 +96,11 @@ impl Settings {
             return Err("并发导入数量需在 1–8 之间".to_string());
         }
         if let Some(window) = &self.window_state {
-            if !window.width.is_finite() || !window.height.is_finite() || window.width <= 0.0 || window.height <= 0.0 {
+            if !window.width.is_finite()
+                || !window.height.is_finite()
+                || window.width <= 0.0
+                || window.height <= 0.0
+            {
                 return Err("窗口尺寸无效".to_string());
             }
         }
@@ -141,7 +137,10 @@ pub fn load_settings(app_handle: &AppHandle) -> Result<Settings, Box<dyn std::er
 }
 
 /// 保存设置（内部函数）
-fn save_settings_internal(app_handle: &AppHandle, settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
+fn save_settings_internal(
+    app_handle: &AppHandle,
+    settings: &Settings,
+) -> Result<(), Box<dyn std::error::Error>> {
     let settings_path = get_settings_path(app_handle);
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -152,25 +151,38 @@ fn save_settings_internal(app_handle: &AppHandle, settings: &Settings) -> Result
 }
 
 /// 保存设置（对外暴露）
-pub fn save_settings(app_handle: &AppHandle, settings: Settings) -> Result<(), Box<dyn std::error::Error>> {
-    settings.validate().map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
+pub fn save_settings(
+    app_handle: &AppHandle,
+    settings: Settings,
+) -> Result<(), Box<dyn std::error::Error>> {
+    settings
+        .validate()
+        .map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
     save_settings_internal(app_handle, &settings)
 }
 
 /// 更新部分配置
-pub fn update_settings<F>(app_handle: &AppHandle, updater: F) -> Result<Settings, Box<dyn std::error::Error>>
+pub fn update_settings<F>(
+    app_handle: &AppHandle,
+    updater: F,
+) -> Result<Settings, Box<dyn std::error::Error>>
 where
     F: FnOnce(&mut Settings),
 {
     let mut settings = load_settings(app_handle)?;
     updater(&mut settings);
-    settings.validate().map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
+    settings
+        .validate()
+        .map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
     save_settings_internal(app_handle, &settings)?;
     Ok(settings)
 }
 
 /// 添加最近文件
-pub fn add_recent_file(app_handle: &AppHandle, file_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub fn add_recent_file(
+    app_handle: &AppHandle,
+    file_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
     update_settings(app_handle, |settings| {
         settings.recent_files.retain(|p| p != &file_path);
         settings.recent_files.insert(0, file_path);

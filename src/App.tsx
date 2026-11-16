@@ -1,6 +1,7 @@
 import { Suspense, useEffect } from 'react';
 import { Sidebar } from '@/components/Sidebar';
 import { LibraryPage } from '@/features/library/LibraryPage';
+import { PluginsPage } from '@/features/library/PluginsPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useAppStore } from '@/stores/app';
 import { cn } from '@/lib/utils';
@@ -51,7 +52,7 @@ export default function App() {
       <Sidebar />
       <ErrorBoundary>
         <PageWrapper>
-          {page === 'library' ? <LibraryPage /> : <SettingsPage />}
+          {page === 'library' ? <LibraryPage /> : page === 'plugins' ? <PluginsPage /> : <SettingsPage />}
         </PageWrapper>
       </ErrorBoundary>
     </div>

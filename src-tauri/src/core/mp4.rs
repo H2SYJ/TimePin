@@ -88,7 +88,11 @@ struct TrackInfo {
     codec: String,
 }
 
-fn parse_trak<R: Read + Seek>(reader: &mut R, start: u64, end: u64) -> io::Result<Option<TrackInfo>> {
+fn parse_trak<R: Read + Seek>(
+    reader: &mut R,
+    start: u64,
+    end: u64,
+) -> io::Result<Option<TrackInfo>> {
     let Some((mdia_start, mdia_end)) = find_box(reader, start, end, *b"mdia")? else {
         return Ok(None);
     };
@@ -119,8 +123,7 @@ fn parse_trak<R: Read + Seek>(reader: &mut R, start: u64, end: u64) -> io::Resul
             parse_mdhd(&mdhd),
             find_box(reader, mdia_start, mdia_end, *b"minf")?,
         ) {
-            if let Some((stbl_start, stbl_end)) =
-                find_box(reader, minf_start, minf_end, *b"stbl")?
+            if let Some((stbl_start, stbl_end)) = find_box(reader, minf_start, minf_end, *b"stbl")?
             {
                 if let Some((stts_start, stts_end)) =
                     find_box(reader, stbl_start, stbl_end, *b"stts")?
@@ -134,9 +137,12 @@ fn parse_trak<R: Read + Seek>(reader: &mut R, start: u64, end: u64) -> io::Resul
         }
     }
 
-    let codec = if let Some((minf_start, minf_end)) = find_box(reader, mdia_start, mdia_end, *b"minf")? {
+    let codec = if let Some((minf_start, minf_end)) =
+        find_box(reader, mdia_start, mdia_end, *b"minf")?
+    {
         if let Some((stbl_start, stbl_end)) = find_box(reader, minf_start, minf_end, *b"stbl")? {
-            if let Some((stsd_start, stsd_end)) = find_box(reader, stbl_start, stbl_end, *b"stsd")? {
+            if let Some((stsd_start, stsd_end)) = find_box(reader, stbl_start, stbl_end, *b"stsd")?
+            {
                 let stsd = read_payload(reader, stsd_start, stsd_end, 128)?;
                 parse_stsd_codec(&stsd).unwrap_or_else(|| "unknown".to_string())
             } else {
@@ -379,10 +385,7 @@ mod tests {
     fn sample_mp4() -> Vec<u8> {
         let stbl = be_box(b"stbl", &[stts_payload(), stsd_payload()].concat());
         let minf = be_box(b"minf", &stbl);
-        let mdia = be_box(
-            b"mdia",
-            &[mdhd_payload(), hdlr_payload(), minf].concat(),
-        );
+        let mdia = be_box(b"mdia", &[mdhd_payload(), hdlr_payload(), minf].concat());
         let tkhd = be_box(b"tkhd", &tkhd_payload());
         let trak = be_box(b"trak", &[tkhd, mdia].concat());
         let mvhd = be_box(b"mvhd", &mvhd_payload());
@@ -397,7 +400,9 @@ mod tests {
         let bytes = sample_mp4();
         let len = bytes.len() as u64;
         let mut cursor = Cursor::new(bytes);
-        let metadata = probe_reader(&mut cursor, len).expect("probe").expect("metadata");
+        let metadata = probe_reader(&mut cursor, len)
+            .expect("probe")
+            .expect("metadata");
 
         assert!((metadata.duration - 10.0).abs() < f64::EPSILON);
         assert_eq!(metadata.width, 1920);
