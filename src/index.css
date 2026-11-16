@@ -6,21 +6,22 @@
 
 @layer base {
   :root {
-    --background: 210 20% 98%;
-    --foreground: 222 24% 16%;
-    --primary: 246 82% 68%;
+    /* 方案 B 浅色：明亮清爽、柔和卡片、紫罗兰强调 — 对应原型 C */
+    --background: 240 10% 97%;
+    --foreground: 240 12% 12%;
+    --primary: 246 82% 58%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 214 32% 95%;
-    --secondary-foreground: 222 24% 24%;
-    --muted: 214 32% 95%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 214 95% 96%;
-    --accent-foreground: 246 82% 52%;
-    --destructive: 0 72% 51%;
+    --secondary: 240 10% 92%;
+    --secondary-foreground: 240 12% 20%;
+    --muted: 240 10% 92%;
+    --muted-foreground: 240 8% 45%;
+    --accent: 240 12% 95%;
+    --accent-foreground: 246 82% 48%;
+    --destructive: 0 62% 52%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 25% 88%;
-    --input: 214 25% 88%;
-    --ring: 246 82% 68%;
+    --border: 240 8% 85%;
+    --input: 240 8% 85%;
+    --ring: 246 82% 58%;
   }
 
   .dark {
