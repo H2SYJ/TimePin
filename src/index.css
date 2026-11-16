@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 24% 16%;
+    --primary: 217 91% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 32% 95%;
+    --secondary-foreground: 222 24% 24%;
+    --muted: 214 32% 95%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 214 95% 96%;
+    --accent-foreground: 217 91% 38%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 25% 88%;
+    --input: 214 25% 88%;
+    --ring: 217 91% 55%;
+  }
+
+  .dark {
+    --background: 222 28% 10%;
+    --foreground: 210 20% 96%;
+    --primary: 213 94% 62%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 24% 17%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 217 24% 17%;
+    --muted-foreground: 215 16% 64%;
+    --accent: 217 32% 21%;
+    --accent-foreground: 213 94% 76%;
+    --destructive: 0 63% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 217 20% 24%;
+    --input: 217 20% 24%;
+    --ring: 213 94% 62%;
+  }
+
+  * {
+    @apply border-divider;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  ::selection {
+    @apply bg-primary/20;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-lg bg-default-200;
+  }
+}
