@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+.vite/
+*.local
+.DS_Store
+npm-debug.log*
+pnpm-debug.log*
+.env
+.env.*
+!.env.example
