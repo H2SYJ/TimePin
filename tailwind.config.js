@@ -45,6 +45,12 @@ export default {
       fontFamily: {
         sans: [
           'JetBrains Mono',
+          'PingFang SC',
+          'Hiragino Sans GB',
+          'Microsoft YaHei',
+          'Noto Sans CJK SC',
+          'Source Han Sans SC',
+          'WenQuanYi Micro Hei',
           'monospace',
         ],
       },
