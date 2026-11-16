@@ -1,9 +1,12 @@
 import { convertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { listen as tauriListen, UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type {
   ExportMode,
   ImportResult,
   Mark,
+  PluginInfo,
+  PluginResult,
   Settings,
   VideoInfo,
   VideoMetadata,
@@ -102,6 +105,73 @@ export const api = {
       outputDir,
       exportMode,
     });
+  },
+
+  // 插件系统 API (M2)
+  async getPlugins(): Promise<PluginInfo[]> {
+    if (!isTauri()) return [];
+    return tauriInvoke<PluginInfo[]>('get_plugins');
+  },
+
+  async reloadPlugins(): Promise<PluginInfo[]> {
+    if (!isTauri()) return [];
+    return tauriInvoke<PluginInfo[]>('reload_plugins');
+  },
+
+  async runPlugin(
+    pluginName: string,
+    video: VideoInfo,
+    params: Record<string, unknown>,
+    outputDir: string,
+  ): Promise<PluginResult> {
+    if (!isTauri()) {
+      throw new Error('插件执行需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<PluginResult>('run_plugin', {
+      pluginName,
+      video,
+      params,
+      outputDir,
+    });
+  },
+
+  async stopPlugin(pluginName: string): Promise<void> {
+    if (!isTauri()) return;
+    return tauriInvoke<void>('stop_plugin', { pluginName });
+  },
+
+  async cancelPluginRun(pluginName: string, taskId: string): Promise<void> {
+    if (!isTauri()) return;
+    return tauriInvoke<void>('cancel_plugin_run', { pluginName, taskId });
+  },
+
+  // 监听插件事件（返回取消监听函数）
+  async onPluginProgress(
+    handler: (event: { pluginName: string; taskId: string; progress: number; message: string | null }) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://progress', (e: any) => handler(e.payload));
+  },
+
+  async onPluginStatus(
+    handler: (event: { pluginName: string; status: string; detail?: string }) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://status', (e: any) => handler(e.payload));
+  },
+
+  async onPluginLog(
+    handler: (event: { pluginName: string; taskId: string; level: string; message: string }) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://log', (e: any) => handler(e.payload));
+  },
+
+  async onPluginResult(
+    handler: (event: { taskId: string; pluginName: string; videoId: string; outcome: string; error?: string; marksCount: number }) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://result', (e: any) => handler(e.payload));
   },
 
   async pickVideoFiles(): Promise<string[]> {

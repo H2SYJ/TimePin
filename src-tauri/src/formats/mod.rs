@@ -9,8 +9,8 @@ pub struct Mark {
     pub start_time: f64,       // 秒
     pub end_time: Option<f64>, // 秒，None 表示时间点
     pub label: String,
-    pub color: Option<String>,     // 十六进制颜色
-    pub confidence: Option<f32>,   // 0.0-1.0
+    pub color: Option<String>,   // 十六进制颜色
+    pub confidence: Option<f32>, // 0.0-1.0
     pub source_plugin: Option<String>,
     pub thumbnail_path: Option<PathBuf>,
     pub metadata: std::collections::HashMap<String, String>,
@@ -180,20 +180,12 @@ pub fn generate_txt_chapters(
 
     for mark in &sorted {
         let label = normalized_label(&mark.label);
-        lines.push(format!(
-            "{} {}",
-            format_time_ogm(mark.start_time),
-            label
-        ));
+        lines.push(format!("{} {}", format_time_ogm(mark.start_time), label));
 
         if let Some(end) = mark.end_time {
             // 零长度区间按时间点处理，避免生成重复章节。
             if end > mark.start_time {
-                lines.push(format!(
-                    "{} {} (结束)",
-                    format_time_ogm(end),
-                    label
-                ));
+                lines.push(format!("{} {} (结束)", format_time_ogm(end), label));
             }
         }
     }

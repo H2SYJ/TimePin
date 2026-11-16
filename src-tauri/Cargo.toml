@@ -1,6 +1,6 @@
 [package]
 name = "timepin"
-version = "0.0.1"
+version = "0.0.2"
 description = "TimePin - 视频时间轴标注工作台"
 authors = ["TimePin Team"]
 license = "MIT"

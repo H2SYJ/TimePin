@@ -1,23 +1,23 @@
+use crate::core::library::{ImportResult, VideoInfo, VideoMetadata};
 use std::path::PathBuf;
 use tauri::AppHandle;
-use crate::core::library::{VideoInfo, VideoMetadata, ImportResult};
 
 #[tauri::command]
-pub async fn import_video(app_handle: AppHandle, source_path: PathBuf) -> Result<ImportResult, String> {
-    crate::core::library::import_video(&app_handle, source_path)
-        .map_err(|e| e.to_string())
+pub async fn import_video(
+    app_handle: AppHandle,
+    source_path: PathBuf,
+) -> Result<ImportResult, String> {
+    crate::core::library::import_video(&app_handle, source_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_videos(app_handle: AppHandle) -> Result<Vec<VideoInfo>, String> {
-    crate::core::library::get_videos(&app_handle)
-        .map_err(|e| e.to_string())
+    crate::core::library::get_videos(&app_handle).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_video(app_handle: AppHandle, id: String) -> Result<(), String> {
-    crate::core::library::delete_video(&app_handle, &id)
-        .map_err(|e| e.to_string())
+    crate::core::library::delete_video(&app_handle, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

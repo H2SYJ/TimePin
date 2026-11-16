@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { api } from '@/lib/ipc';
 import type { Settings, Theme, VideoInfo } from '@/types';
 
-type Page = 'library' | 'settings';
+type Page = 'library' | 'plugins' | 'settings';
 
 const defaultSettings: Settings = {
   importDirectory: null,

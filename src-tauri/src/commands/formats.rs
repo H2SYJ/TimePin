@@ -1,17 +1,18 @@
+use crate::formats::Mark;
 use std::path::PathBuf;
 use tauri::AppHandle;
-use crate::formats::Mark;
 
 #[tauri::command]
-pub async fn generate_txt_chapters(marks: Vec<Mark>, video_duration: f64) -> Result<String, String> {
-    crate::formats::generate_txt_chapters(&marks, video_duration)
-        .map_err(|e| e.to_string())
+pub async fn generate_txt_chapters(
+    marks: Vec<Mark>,
+    video_duration: f64,
+) -> Result<String, String> {
+    crate::formats::generate_txt_chapters(&marks, video_duration).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn generate_csv_markers(marks: Vec<Mark>, video_duration: f64) -> Result<String, String> {
-    crate::formats::generate_csv_markers(&marks, video_duration)
-        .map_err(|e| e.to_string())
+    crate::formats::generate_csv_markers(&marks, video_duration).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -94,3 +94,86 @@ export interface ExportProgressEvent {
   currentSegment: string | null;
   status: 'pending' | 'running' | 'completed' | 'failed';
 }
+
+/** ========== 插件系统类型（M2） ========== */
+
+export interface PluginCapability {
+  // videoFrames | audioSamples | metadata | gpu | network | fileWrite
+  type: string;
+}
+
+export interface PluginManifest {
+  protocolVersion: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  entry: string;
+  runtime: 'python' | 'rust' | 'node' | 'binary';
+  capabilities: string[];
+  parametersSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+}
+
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  runtime: string;
+  capabilities: string[];
+  parametersSchema: unknown;
+  dir: string;
+  status: 'ready' | 'invalid' | 'crashed' | 'running';
+  statusDetail: string | null;
+}
+
+export interface PluginRunParams {
+  taskId: string;
+  video: {
+    id: string;
+    path: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    metadata: Record<string, string>;
+  };
+  params: Record<string, unknown>;
+  outputDir: string;
+}
+
+export interface PluginResult {
+  protocolVersion: string;
+  pluginName: string;
+  marks: Mark[];
+  logs: string[];
+  evidencePaths: string[];
+}
+
+export interface PluginProgressEvent {
+  schemaVersion: string;
+  pluginName: string;
+  taskId: string;
+  progress: number;
+  message: string | null;
+}
+
+export interface PluginStatusEvent {
+  schemaVersion: string;
+  pluginName: string;
+  // discovered | validated | started | ready | running | stopped | crashed
+  status: string;
+  detail?: string;
+}
+
+export interface PluginRunFinished {
+  schemaVersion: string;
+  taskId: string;
+  pluginName: string;
+  videoId: string;
+  // ok | error | cancelled | crashed
+  outcome: string;
+  error?: string;
+  marksCount: number;
+}
