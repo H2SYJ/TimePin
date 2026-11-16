@@ -5,7 +5,7 @@ TimePin（时签）是本地优先、插件化的视频时间轴标注工作台�
 
 ## 核心技术栈（不可随意替换）
 - **外壳**：Tauri 2（Rust 主进程）
-- **前端**：React 18/19 + TypeScript + Vite；shadcn/ui + Tailwind CSS；Zustand 状态管理
+- **前端**：React 18/19 + TypeScript + Vite；**HeroUI v2 + Tailwind CSS v3**；Zustand 状态管理
 - **Rust 核心**：媒体元数据读取、任务调度、插件进程管理、FFmpeg 调用、伴随文件生成、IPC 事件
 - **计算 Sidecar**：Python（OpenCV、ONNX Runtime、PaddleOCR/Tesseract）优先，Rust 二进制插件次之
 - **通信**：前端↔Rust 用 Tauri IPC；Rust↔Sidecar 用 JSON-RPC over stdio；进度通过 Tauri event 推送
@@ -15,7 +15,7 @@ TimePin（时签）是本地优先、插件化的视频时间轴标注工作台�
 ```
 timepin/
 ├── src/                    # React 前端源码
-│   ├── components/         # 通用 UI 组件
+│   ├── components/         # 通用 UI 组件（HeroUI 语义封装，集中在 components/ui）
 │   ├── features/           # 业务功能模块
 │   │   ├── settings/       # 设置页面
 │   │   ├── library/        # 媒体库/视频导入
@@ -63,8 +63,10 @@ timepin/
 ### UI 设计规范
 - **简洁精致 + 圆角为主**
 - **禁止堆各种阴影**（box-shadow 仅在极少数交互态使用，如 dropdown、tooltip）
-- 使用 Tailwind CSS，遵循 shadcn/ui 设计语言
-- 主色调：中性灰 + 单一品牌色（建议蓝色系）
+- 使用 **HeroUI v2**（`@heroui/react`，基于 React Aria）+ Tailwind CSS v3；统一通过 `src/components/ui` 的封装组件调用，业务代码不直接散落使用 HeroUI 原生 props
+- 语义色板使用 HeroUI 设计 token：`bg-background`、`text-foreground`、`text-default-400/500`、`bg-default-50/100`、`border-divider`、`text-primary`；旧 shadcn 变量（`muted-foreground`、`secondary`、`accent` 等）仅保留在 `index.css` 作兼容别名，新代码一律使用 default/foreground/divider 语义类
+- 交互 props 遵循 React Aria 习惯：`onPress`/`onValueChange`/`isDisabled`/`selectedKeys`，不再用原生 `onClick`/`onChange`/`disabled` 驱动 HeroUI 组件
+- 主色调：中性灰 + 单一品牌色（蓝色系 `primary`）
 - 圆角：`rounded-lg` (8px) 为基础，卡片 `rounded-xl` (12px)，按钮 `rounded-md` (6px)
 - 间距：基于 4px 网格（`gap-4`、`p-4`、`m-4` 等）
 - 字体：系统字体栈，中文优先 `font-sans`

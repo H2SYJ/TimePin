@@ -1,57 +1,87 @@
 import * as React from 'react';
+import {
+  Button as HeroButton,
+  Card as HeroCard,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Input as HeroInput,
+  Select as HeroSelect,
+  SelectItem,
+  Switch as HeroSwitch,
+  Chip,
+  type ButtonProps as HeroButtonProps,
+  type CardProps as HeroCardProps,
+  type InputProps as HeroInputProps,
+  type SelectProps as HeroSelectProps,
+  type SwitchProps as HeroSwitchProps,
+  type ChipProps,
+} from '@heroui/react';
 import { cn } from '@/lib/utils';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'icon';
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends Omit<HeroButtonProps, 'variant' | 'size' | 'color'> {
   variant?: ButtonVariant;
   size?: ButtonSize;
 }
 
-const variantClass: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-  ghost: 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-  danger: 'bg-destructive/10 text-destructive hover:bg-destructive/20',
+const buttonVariantMap: Record<ButtonVariant, Pick<HeroButtonProps, 'color' | 'variant' | 'className'>> = {
+  primary: { color: 'primary', variant: 'solid' },
+  secondary: { color: 'default', variant: 'flat' },
+  ghost: { color: 'default', variant: 'light' },
+  danger: { color: 'danger', variant: 'flat' },
 };
 
-const sizeClass: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-xs',
-  md: 'h-9 px-4 text-sm',
-  icon: 'h-9 w-9',
+const buttonSizeMap: Record<ButtonSize, HeroButtonProps['size']> = {
+  sm: 'sm',
+  md: 'md',
+  icon: 'sm',
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'primary', size = 'md', type = 'button', ...props }, ref) => (
-    <button
-      ref={ref}
-      type={type}
-      className={cn(
-        'inline-flex shrink-0 items-center justify-center gap-2 rounded-md font-medium transition-colors',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-        'disabled:pointer-events-none disabled:opacity-50',
-        variantClass[variant],
-        sizeClass[size],
-        className,
-      )}
-      {...props}
-    />
-  ),
+  ({ className, variant = 'primary', size = 'md', isIconOnly, children, ...props }, ref) => {
+    const mapped = buttonVariantMap[variant];
+    const iconOnly = isIconOnly ?? size === 'icon';
+    return (
+      <HeroButton
+        ref={ref}
+        radius={size === 'icon' ? 'md' : 'lg'}
+        size={buttonSizeMap[size]}
+        color={mapped.color}
+        variant={mapped.variant}
+        isIconOnly={iconOnly}
+        className={cn(
+          'font-medium transition-transform active:scale-[0.98]',
+          variant === 'ghost' && 'text-default-500 data-[hover=true]:text-foreground',
+          variant === 'secondary' && 'bg-default-100 text-default-700',
+          variant === 'danger' && 'bg-danger-50 text-danger',
+          className,
+        )}
+        {...props}
+      >
+        {children}
+      </HeroButton>
+    );
+  },
 );
 Button.displayName = 'Button';
 
-interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface CardProps extends HeroCardProps {
   interactive?: boolean;
 }
 
 export const Card = React.forwardRef<HTMLDivElement, CardProps>(
-  ({ className, interactive = false, ...props }, ref) => (
-    <div
+  ({ className, interactive = false, radius = 'lg', shadow = 'none', ...props }, ref) => (
+    <HeroCard
       ref={ref}
+      radius={radius}
+      shadow={shadow}
+      isBlurred={false}
       className={cn(
-        'rounded-xl border border-border bg-background',
-        interactive && 'transition-colors hover:border-primary/50 hover:bg-accent/40',
+        'border border-divider bg-background',
+        interactive && 'transition-colors data-[hover=true]:border-primary/50 data-[hover=true]:bg-default-50',
         className,
       )}
       {...props}
@@ -60,93 +90,79 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
 );
 Card.displayName = 'Card';
 
-export function Input({
-  className,
-  ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+export { CardBody, CardFooter, CardHeader };
+
+export function Input({ className, variant = 'bordered', radius = 'md', ...props }: HeroInputProps) {
   return (
-    <input
-      className={cn(
-        'h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors',
-        'placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-        className,
-      )}
+    <HeroInput
+      variant={variant}
+      radius={radius}
+      classNames={{
+        input: 'text-sm',
+        inputWrapper: cn('h-9 min-h-9 bg-background', className),
+      }}
       {...props}
     />
   );
 }
 
-export function Select({
-  className,
-  ...props
-}: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      className={cn(
-        'h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors',
-        'focus:border-primary focus:ring-2 focus:ring-primary/15',
-        className,
-      )}
-      {...props}
-    />
-  );
+export interface SelectProps extends Omit<HeroSelectProps, 'children'> {
+  children: NonNullable<HeroSelectProps['children']>;
 }
 
-export function Label({
-  className,
-  ...props
-}: React.LabelHTMLAttributes<HTMLLabelElement>) {
+export function Select({ className, variant = 'bordered', radius = 'md', children, ...props }: SelectProps) {
   return (
-    <label
-      className={cn('text-sm font-medium text-foreground', className)}
+    <HeroSelect
+      variant={variant}
+      radius={radius}
+      classNames={{
+        trigger: cn('h-9 min-h-9 bg-background', className),
+        value: 'text-sm',
+      }}
       {...props}
-    />
-  );
-}
-
-export function Switch({
-  checked,
-  onCheckedChange,
-  label,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        'relative h-6 w-11 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        checked ? 'bg-primary' : 'bg-input',
-      )}
     >
-      <span
-        className={cn(
-          'absolute top-1 h-4 w-4 rounded-full bg-white transition-all',
-          checked ? 'left-6' : 'left-1',
-        )}
-      />
-    </button>
+      {children}
+    </HeroSelect>
   );
 }
 
-export function Badge({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLSpanElement>) {
+export { SelectItem };
+export const SelectOption = SelectItem;
+
+export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
+  return <label className={cn('text-sm font-medium text-foreground', className)} {...props} />;
+}
+
+export interface SwitchProps extends Omit<HeroSwitchProps, 'onChange'> {
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
+  label?: string;
+}
+
+export function Switch({ checked, onCheckedChange, label, className, size = 'sm', color = 'primary', ...props }: SwitchProps) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground',
-        className,
-      )}
+    <HeroSwitch
+      size={size}
+      color={color}
+      isSelected={checked}
+      onValueChange={onCheckedChange}
+      aria-label={label}
+      className={className}
       {...props}
     />
+  );
+}
+
+export function Badge({ className, children, ...props }: ChipProps) {
+  return (
+    <Chip
+      size="sm"
+      radius="sm"
+      variant="flat"
+      className={cn('bg-default-100 text-default-700', className)}
+      {...props}
+    >
+      {children}
+    </Chip>
   );
 }

@@ -1,6 +1,6 @@
 import { Check, Info, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Button, Card, Input, Label, Select, Switch } from '@/components/ui';
+import { Button, Card, Input, Label, Select, SelectItem, Switch } from '@/components/ui';
 import { useAppStore } from '@/stores/app';
 import type { ExportMode, Settings, Theme } from '@/types';
 
@@ -17,7 +17,7 @@ function Section({
     <Card className="p-6">
       <div className="mb-5">
         <h2 className="text-base font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+        <p className="mt-1 text-sm text-default-500">{description}</p>
       </div>
       <div className="space-y-5">{children}</div>
     </Card>
@@ -37,7 +37,7 @@ function Field({
     <div className="grid grid-cols-[180px_1fr] items-center gap-4">
       <div>
         <Label>{label}</Label>
-        {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+        {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
       </div>
       <div>{children}</div>
     </div>
@@ -73,18 +73,18 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-border px-8 py-5">
+      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">软件设置</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-default-500">
             配置保存在本地应用数据目录，重启后自动恢复。
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={reset} disabled={!hasChanges}>
+          <Button variant="ghost" onPress={reset} isDisabled={!hasChanges}>
             <RotateCcw className="h-4 w-4" /> 撤销更改
           </Button>
-          <Button onClick={() => void save()} disabled={!hasChanges}>
+          <Button onPress={() => void save()} isDisabled={!hasChanges}>
             {saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
             {saved ? '已保存' : '保存设置'}
           </Button>
@@ -97,22 +97,28 @@ export function SettingsPage() {
             <Field label="主题">
               <Select
                 aria-label="主题"
-                value={draft.theme}
-                onChange={(event) => patch('theme', event.target.value as Theme)}
+                selectedKeys={[draft.theme]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0];
+                  if (value) patch('theme', value as Theme);
+                }}
               >
-                <option value="system">跟随系统</option>
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
+                <SelectItem key="system">跟随系统</SelectItem>
+                <SelectItem key="light">浅色</SelectItem>
+                <SelectItem key="dark">深色</SelectItem>
               </Select>
             </Field>
             <Field label="界面语言">
               <Select
                 aria-label="界面语言"
-                value={draft.language}
-                onChange={(event) => patch('language', event.target.value)}
+                selectedKeys={[draft.language]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0];
+                  if (value) patch('language', String(value));
+                }}
               >
-                <option value="zh-CN">简体中文</option>
-                <option value="en-US">English</option>
+                <SelectItem key="zh-CN">简体中文</SelectItem>
+                <SelectItem key="en-US">English</SelectItem>
               </Select>
             </Field>
           </Section>
@@ -121,19 +127,24 @@ export function SettingsPage() {
             <Field label="默认导入目录" hint="留空时由文件选择器决定">
               <Input
                 aria-label="默认导入目录"
-                placeholder="例如 D:\\Recordings"
+                placeholder="例如 D:\Recordings"
                 value={draft.importDirectory ?? ''}
-                onChange={(event) => patch('importDirectory', event.target.value || null)}
+                onValueChange={(value) => patch('importDirectory', value || null)}
               />
             </Field>
             <Field label="最大并发导入数" hint="同时处理的视频数量">
               <Select
                 aria-label="最大并发导入数"
-                value={String(draft.maxConcurrentImports)}
-                onChange={(event) => patch('maxConcurrentImports', Number(event.target.value))}
+                selectedKeys={[String(draft.maxConcurrentImports)]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0];
+                  if (value) patch('maxConcurrentImports', Number(value));
+                }}
               >
                 {[1, 2, 3, 4, 6, 8].map((value) => (
-                  <option key={value} value={value}>{value}</option>
+                  <SelectItem key={String(value)} textValue={String(value)}>
+                    {value}
+                  </SelectItem>
                 ))}
               </Select>
             </Field>
@@ -143,8 +154,8 @@ export function SettingsPage() {
                 type="number"
                 min={1}
                 max={100}
-                value={draft.thumbnailQuality}
-                onChange={(event) => patch('thumbnailQuality', Number(event.target.value))}
+                value={String(draft.thumbnailQuality)}
+                onValueChange={(value) => patch('thumbnailQuality', Number(value))}
               />
             </Field>
             <Field label="缩略图最大尺寸" hint="按长边等比缩放，单位像素">
@@ -153,8 +164,8 @@ export function SettingsPage() {
                 type="number"
                 min={80}
                 max={1920}
-                value={draft.thumbnailMaxDimension}
-                onChange={(event) => patch('thumbnailMaxDimension', Number(event.target.value))}
+                value={String(draft.thumbnailMaxDimension)}
+                onValueChange={(value) => patch('thumbnailMaxDimension', Number(value))}
               />
             </Field>
           </Section>
@@ -163,11 +174,14 @@ export function SettingsPage() {
             <Field label="默认导出模式" hint="帧精确模式会重编码首尾 GOP，耗时更长">
               <Select
                 aria-label="默认导出模式"
-                value={draft.defaultExportMode}
-                onChange={(event) => patch('defaultExportMode', event.target.value as ExportMode)}
+                selectedKeys={[draft.defaultExportMode]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0];
+                  if (value) patch('defaultExportMode', value as ExportMode);
+                }}
               >
-                <option value="streamCopy">快速导出 · 流复制（默认）</option>
-                <option value="frameAccurate">帧精确 · 首尾 GOP 重编码</option>
+                <SelectItem key="streamCopy">快速导出 · 流复制（默认）</SelectItem>
+                <SelectItem key="frameAccurate">帧精确 · 首尾 GOP 重编码</SelectItem>
               </Select>
             </Field>
             <Field label="FFmpeg 路径" hint="留空时使用系统 PATH 中的 ffmpeg">
@@ -175,7 +189,7 @@ export function SettingsPage() {
                 aria-label="FFmpeg 路径"
                 placeholder="自动检测"
                 value={draft.ffmpegPath ?? ''}
-                onChange={(event) => patch('ffmpegPath', event.target.value || null)}
+                onValueChange={(value) => patch('ffmpegPath', value || null)}
               />
             </Field>
             <Field label="硬件加速" hint="用于后续插件推理与缩略图处理">
@@ -189,7 +203,7 @@ export function SettingsPage() {
             </Field>
           </Section>
 
-          <div className="flex items-start gap-3 rounded-xl border border-primary/20 bg-accent/50 px-4 py-3 text-sm text-muted-foreground">
+          <div className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary-50/60 px-4 py-3 text-sm text-default-500">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
             <p>
               M1 阶段设置已持久化；插件目录、FFmpeg 自定义路径等高级项将在后续里程碑接入实际处理流程。

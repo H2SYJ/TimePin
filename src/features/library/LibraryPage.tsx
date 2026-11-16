@@ -78,14 +78,14 @@ export function LibraryPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-border px-8 py-5">
+      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">媒体库</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-default-500">
             导入本地视频，查看元数据并预览。原视频始终保持不变。
           </p>
         </div>
-        <Button onClick={() => void pickFiles()} disabled={importing}>
+        <Button onPress={() => void pickFiles()} isDisabled={importing}>
           {importing ? (
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
           ) : (
@@ -100,7 +100,7 @@ export function LibraryPage() {
           <div
             className={cn(
               'mb-6 flex min-h-32 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 text-center transition-colors',
-              dragging ? 'border-primary bg-accent/60' : 'border-border bg-secondary/30',
+              dragging ? 'border-primary bg-primary-50/60' : 'border-divider bg-default-50',
             )}
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-background text-primary">
@@ -108,31 +108,31 @@ export function LibraryPage() {
             </div>
             <div>
               <p className="text-sm font-medium">将视频拖放到这里</p>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-xs text-default-400">
                 支持 MP4、MKV、MOV、AVI 等格式；也可使用右上角按钮选择多个文件
               </p>
             </div>
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-default-400">
               <LoaderCircle className="h-4 w-4 animate-spin" /> 正在加载媒体库…
             </div>
           ) : videos.length === 0 ? (
             <Card className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-muted-foreground">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-default-100 text-default-400">
                 <Film className="h-6 w-6" />
               </div>
               <div>
                 <p className="text-sm font-medium">媒体库还是空的</p>
-                <p className="mt-1 text-xs text-muted-foreground">导入一个视频，开始整理你的时间轴</p>
+                <p className="mt-1 text-xs text-default-400">导入一个视频，开始整理你的时间轴</p>
               </div>
             </Card>
           ) : (
             <>
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-sm font-medium">全部视频</h2>
-                <span className="text-xs text-muted-foreground">{videos.length} 项</span>
+                <span className="text-xs text-default-400">{videos.length} 项</span>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {videos.map((video) => <VideoCard key={video.id} video={video} />)}
@@ -141,7 +141,7 @@ export function LibraryPage() {
           )}
         </main>
 
-        <aside className="scrollbar-thin w-[360px] shrink-0 overflow-y-auto border-l border-border bg-secondary/20 p-5">
+        <aside className="scrollbar-thin w-[360px] shrink-0 overflow-y-auto border-l border-divider bg-default-50 p-5">
           <VideoDetail />
         </aside>
       </div>

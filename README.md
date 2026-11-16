@@ -86,7 +86,7 @@ TimePin 的目标是成为**打标规则可插拔、识别结果跨软件可见�
 ## 7. 技术架构（首选方案）
 
 - **外壳**：Tauri 2（Rust 主进程）。
-- **前端**：React 18/19 + TypeScript + Vite；组件库可用 shadcn/ui + Tailwind；状态管理 Zustand/Redux Toolkit。
+- **前端**：React 18/19 + TypeScript + Vite；组件库使用 **HeroUI v2**（基于 React Aria，无障碍友好）+ Tailwind CSS v3；状态管理 Zustand/Redux Toolkit。
 - **核心服务（Rust）**：文件管理、任务调度、插件进程管理、FFmpeg 调用、文件生成、IPC 事件。
 - **计算 Sidecar**：Python（OpenCV、ONNX Runtime、OCR、ok-script 识别原语封装）或 Rust 二进制；每个插件独立进程。
 - **通信**：Tauri IPC（前端 ↔ Rust）；Rust ↔ Sidecar 用 JSON-RPC/stdio；进度通过 Tauri event 推送到前端。

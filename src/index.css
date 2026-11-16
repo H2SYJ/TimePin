@@ -40,7 +40,7 @@
   }
 
   * {
-    @apply border-border;
+    @apply border-divider;
   }
 
   html,
@@ -72,6 +72,6 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply rounded-lg bg-border;
+    @apply rounded-lg bg-default-200;
   }
 }

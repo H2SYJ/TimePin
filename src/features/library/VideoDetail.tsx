@@ -1,6 +1,6 @@
 import { Check, Clock, Copy, FileVideo, Film, HardDrive, Monitor } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, Button, Card } from '@/components/ui';
+import { Badge, Button, Card, CardBody, CardFooter, CardHeader } from '@/components/ui';
 import { fileSrc } from '@/lib/ipc';
 import { formatDate, formatDuration, formatFileSize } from '@/lib/utils';
 import { useAppStore } from '@/stores/app';
@@ -11,8 +11,8 @@ function MetaRow({ icon: Icon, label, value }: {
   value: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border py-3 last:border-b-0">
-      <span className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="flex items-center justify-between gap-4 border-b border-divider py-3 last:border-b-0">
+      <span className="flex items-center gap-2 text-sm text-default-500">
         <Icon className="h-4 w-4" aria-hidden="true" />
         {label}
       </span>
@@ -32,12 +32,12 @@ export function VideoDetail() {
   if (!video) {
     return (
       <Card className="flex min-h-[220px] flex-col items-center justify-center gap-3 p-8 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-muted-foreground">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-default-100 text-default-400">
           <Film className="h-6 w-6" />
         </div>
         <div>
           <p className="text-sm font-medium">尚未选择视频</p>
-          <p className="mt-1 text-xs text-muted-foreground">从媒体库中选择一项查看详情与预览</p>
+          <p className="mt-1 text-xs text-default-400">从媒体库中选择一项查看详情与预览</p>
         </div>
       </Card>
     );
@@ -48,15 +48,15 @@ export function VideoDetail() {
 
   return (
     <Card className="overflow-hidden">
-      <div className="border-b border-border bg-secondary/30 p-4">
-        <div className="flex items-start justify-between gap-3">
+      <CardHeader className="border-b border-divider bg-default-50 p-4">
+        <div className="flex w-full items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">视频详情</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-default-400">视频详情</p>
             <h2 className="mt-1 truncate text-lg font-semibold" title={video.name}>{video.name}</h2>
           </div>
-          <Badge className="shrink-0 bg-primary/10 text-primary">已导入</Badge>
+          <Badge className="shrink-0 bg-primary-50 text-primary">已导入</Badge>
         </div>
-      </div>
+      </CardHeader>
 
       <div className="aspect-video w-full bg-slate-950">
         <video
@@ -71,7 +71,7 @@ export function VideoDetail() {
         </video>
       </div>
 
-      <div className="px-4 pb-2 pt-1">
+      <CardBody className="px-4 pb-2 pt-1">
         <MetaRow icon={Clock} label="时长" value={formatDuration(video.duration)} />
         <MetaRow
           icon={Monitor}
@@ -85,37 +85,39 @@ export function VideoDetail() {
         />
         <MetaRow icon={HardDrive} label="文件大小" value={formatFileSize(video.fileSize)} />
         <MetaRow icon={FileVideo} label="导入时间" value={formatDate(video.importedAt)} />
-      </div>
+      </CardBody>
 
-      <div className="border-t border-border bg-secondary/30 p-4">
-        <p className="mb-2 text-xs font-medium text-muted-foreground">源文件路径</p>
-        <div className="flex items-center gap-2">
-          <code
-            className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1.5 text-xs"
-            title={sourcePath}
-          >
-            {sourcePath}
-          </code>
-          <Button
-            size="sm"
-            variant="secondary"
-            title="复制源文件路径"
-            onClick={() => {
-              if (!navigator.clipboard) return;
-              void navigator.clipboard
-                .writeText(sourcePath)
-                .then(() => {
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1500);
-                })
-                .catch(() => setCopied(false));
-            }}
-          >
-            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {copied ? '已复制' : '复制'}
-          </Button>
+      <CardFooter className="border-t border-divider bg-default-50 p-4">
+        <div className="w-full">
+          <p className="mb-2 text-xs font-medium text-default-400">源文件路径</p>
+          <div className="flex items-center gap-2">
+            <code
+              className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1.5 text-xs"
+              title={sourcePath}
+            >
+              {sourcePath}
+            </code>
+            <Button
+              size="sm"
+              variant="secondary"
+              title="复制源文件路径"
+              onPress={() => {
+                if (!navigator.clipboard) return;
+                void navigator.clipboard
+                  .writeText(sourcePath)
+                  .then(() => {
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  })
+                  .catch(() => setCopied(false));
+              }}
+            >
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? '已复制' : '复制'}
+            </Button>
+          </div>
         </div>
-      </div>
+      </CardFooter>
     </Card>
   );
 }

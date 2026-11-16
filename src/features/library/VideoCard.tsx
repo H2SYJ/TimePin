@@ -1,6 +1,6 @@
 import { Film, ImageOff, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, Button, Card } from '@/components/ui';
+import { Badge, Button, Card, CardBody } from '@/components/ui';
 import { fileSrc } from '@/lib/ipc';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useAppStore } from '@/stores/app';
@@ -22,7 +22,7 @@ function Thumbnail({ video }: { video: VideoInfo }) {
   }
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-secondary text-muted-foreground">
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-default-100 text-default-400">
       {failed ? <ImageOff className="h-7 w-7" /> : <Film className="h-7 w-7" />}
       <span className="text-xs">暂无预览</span>
     </div>
@@ -38,6 +38,7 @@ export function VideoCard({ video }: { video: VideoInfo }) {
   return (
     <Card
       interactive
+      isHoverable
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -48,16 +49,16 @@ export function VideoCard({ video }: { video: VideoInfo }) {
           selectVideo(video.id);
         }
       }}
-      className={`group cursor-pointer overflow-hidden ${selected ? 'border-primary ring-2 ring-primary/15' : ''}`}
+      className={`group cursor-pointer overflow-hidden ${selected ? 'border-primary ring-2 ring-primary/20' : ''}`}
     >
-      <div className="relative aspect-video overflow-hidden border-b border-border bg-muted">
+      <div className="relative aspect-video overflow-hidden border-b border-divider bg-default-100">
         <Thumbnail video={video} />
         <span className="absolute bottom-2 right-2 rounded-md bg-slate-950/75 px-2 py-1 text-xs font-medium tabular-nums text-white">
           {formatDuration(video.duration)}
         </span>
       </div>
 
-      <div className="space-y-3 p-4">
+      <CardBody className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-2">
           <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={video.name}>
             {video.name}
@@ -65,15 +66,15 @@ export function VideoCard({ video }: { video: VideoInfo }) {
           <Badge className="shrink-0 uppercase">{video.codec || 'UNKNOWN'}</Badge>
         </div>
 
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-default-400">
           <span>{video.width > 0 && video.height > 0 ? `${video.width} × ${video.height}` : '未知分辨率'}</span>
           <span>{Number.isFinite(video.fps) && video.fps > 0 ? `${video.fps.toFixed(2)} fps` : '-- fps'}</span>
           <span>{formatFileSize(video.fileSize)}</span>
         </div>
 
-        <div className="flex items-center justify-between border-t border-border pt-3">
+        <div className="flex items-center justify-between border-t border-divider pt-3">
           <span
-            className="truncate text-xs text-muted-foreground"
+            className="truncate text-xs text-default-400"
             title={video.sourcePath || video.path}
           >
             {video.sourcePath || video.path}
@@ -83,21 +84,19 @@ export function VideoCard({ video }: { video: VideoInfo }) {
               <Button
                 size="sm"
                 variant="danger"
-                onClick={(event) => {
-                  event.stopPropagation();
+                onPress={() => {
                   void deleteVideo(video.id);
                   setConfirmDelete(false);
                 }}
+                onClick={(event) => event.stopPropagation()}
               >
                 确认
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setConfirmDelete(false);
-                }}
+                onPress={() => setConfirmDelete(false)}
+                onClick={(event) => event.stopPropagation()}
               >
                 取消
               </Button>
@@ -108,17 +107,15 @@ export function VideoCard({ video }: { video: VideoInfo }) {
               variant="ghost"
               aria-label={`从媒体库移除 ${video.name}（不会删除原文件）`}
               title="从媒体库移除，不会删除原文件"
-              className="h-8 w-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-              onClick={(event) => {
-                event.stopPropagation();
-                setConfirmDelete(true);
-              }}
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              onPress={() => setConfirmDelete(true)}
+              onClick={(event) => event.stopPropagation()}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
-      </div>
+      </CardBody>
     </Card>
   );
 }
