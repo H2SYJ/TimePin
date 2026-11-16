@@ -134,14 +134,14 @@ export function LibraryPage() {
                 <h2 className="text-sm font-medium">全部视频</h2>
                 <span className="text-xs text-default-400">{videos.length} 项</span>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {videos.map((video) => <VideoCard key={video.id} video={video} />)}
               </div>
             </>
           )}
         </main>
 
-        <aside className="scrollbar-thin w-[360px] shrink-0 overflow-y-auto border-l border-divider bg-default-50 p-5">
+        <aside className="scrollbar-thin hidden w-[320px] shrink-0 overflow-y-auto border-l border-divider bg-default-50 p-5 lg:block xl:w-[380px] 2xl:w-[420px]">
           <VideoDetail />
         </aside>
       </div>

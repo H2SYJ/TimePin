@@ -34,7 +34,7 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[180px_1fr] items-center gap-4">
+    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-center sm:gap-4">
       <div>
         <Label>{label}</Label>
         {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
@@ -92,7 +92,7 @@ export function SettingsPage() {
       </header>
 
       <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <div className="mx-auto max-w-4xl space-y-5 pb-8">
+        <div className="w-full min-w-0 space-y-5 pb-8">
           <Section title="外观与语言" description="调整界面主题和语言偏好。">
             <Field label="主题">
               <Select
