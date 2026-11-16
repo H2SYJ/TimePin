@@ -127,7 +127,7 @@ export function PluginsPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <div className="flex flex-col items-center gap-3 text-default-400">
           <Loader2 className="h-6 w-6 animate-spin" />
           <span className="text-sm">加载插件中…</span>
         </div>
@@ -136,29 +136,43 @@ export function PluginsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col p-4 gap-4 overflow-auto">
+    <div className="flex h-full flex-col gap-4 overflow-auto px-8 pb-8 pt-6">
       {/* 顶部工具栏 */}
-      <div className="flex items-center gap-3">
-        <h2 className="text-lg font-semibold">插件管理</h2>
-        <Button variant="secondary" size="sm" onClick={handleReload} disabled={loading}>
-          <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">插件</h1>
+            {plugins.some((p) => p.status === 'crashed') && (
+              <Badge className="border border-warning/40 bg-warning/10 text-warning">
+                有插件已崩溃
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1.5 text-sm text-default-500">
+            管理自动打标插件，新插件放入 plugins/ 目录即可被识别
+          </p>
+        </div>
+        <Button variant="secondary" onClick={handleReload} disabled={loading}>
+          <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} aria-hidden="true" />
           重新加载
         </Button>
-        {plugins.some((p) => p.status === 'crashed') && (
-          <Badge className="bg-warning text-warning-foreground">有插件已崩溃</Badge>
-        )}
       </div>
 
       {/* 插件列表 */}
       <div className="flex-1 overflow-auto space-y-3">
         {plugins.length === 0 ? (
-          <Card className="p-8 text-center text-muted-foreground">
-            <Code className="h-12 w-12 mx-auto mb-3 opacity-30" aria-hidden="true" />
-            <p className="text-sm">未发现插件</p>
-            <p className="text-xs mt-1">
-              在 <code>plugins/</code> 目录或设置的自定义插件目录下放入
-              <code>plugin.json</code> + 入口文件，点击「重新加载」即可发现。
-            </p>
+          <Card className="flex flex-col items-center justify-center gap-3 rounded-2xl border-divider bg-default-50/50 p-10 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+              <Code className="h-7 w-7" aria-hidden="true" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">未发现插件</p>
+              <p className="mt-1 text-xs leading-relaxed text-default-400">
+                在 <code className="rounded border border-divider bg-background px-1 font-mono">plugins/</code> 目录
+                或设置的自定义插件目录下放入 <code className="rounded border border-divider bg-background px-1 font-mono">plugin.json</code> + 入口文件，
+                点击「重新加载」即可发现。
+              </p>
+            </div>
           </Card>
         ) : (
           plugins.map((plugin) => (
@@ -177,14 +191,14 @@ export function PluginsPage() {
 
       {/* 日志面板 */}
       {logs.length > 0 && (
-        <Card className="h-64 flex flex-col">
-          <CardHeader className="flex items-center justify-between p-3">
+        <Card className="flex h-64 flex-col rounded-2xl border-divider bg-default-50/50">
+          <CardHeader className="flex items-center justify-between p-4 pb-3">
             <h3 className="text-sm font-medium">插件日志</h3>
             <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
           </CardHeader>
-          <CardBody className="flex-1 overflow-auto p-3 font-mono text-xs bg-default-50 rounded-lg">
+          <CardBody className="flex-1 overflow-auto rounded-xl bg-background/60 p-3 font-mono text-xs">
             <div className="space-y-1">
               {logs.map((log, i) => (
                 <div
@@ -237,7 +251,7 @@ function PluginCard({
     ? <AlertTriangle className="h-4 w-4 text-danger" />
     : isInvalid
     ? <XCircle className="h-4 w-4 text-warning" />
-    : <RotateCcw className="h-4 w-4 text-muted-foreground" />;
+    : <RotateCcw className="h-4 w-4 text-default-400" />;
 
   const statusText = isRunning
     ? '运行中'
@@ -253,22 +267,22 @@ function PluginCard({
   const runningTask = Object.entries(runningTasks).find(([_, v]) => v); // 简化：只要有进度就认为在跑
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="p-3">
+    <Card className="overflow-hidden rounded-2xl border-divider bg-default-50/50">
+      <CardHeader className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-              <Code className="h-5 w-5 text-primary" aria-hidden="true" />
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
+              <Code className="h-5 w-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="font-medium truncate">{plugin.name}</h3>
-                <Badge variant="flat" className="text-xs">{plugin.runtime}</Badge>
+                <h3 className="truncate font-medium">{plugin.name}</h3>
+                <Badge className="border border-divider bg-background text-xs">{plugin.runtime}</Badge>
                 {statusIcon}
-                <span className="text-xs text-muted-foreground">{statusText}</span>
+                <span className="text-xs text-default-400">{statusText}</span>
               </div>
-              <p className="text-xs text-muted-foreground truncate mt-1">{plugin.description}</p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="mt-1 truncate text-xs text-default-400">{plugin.description}</p>
+              <p className="mt-1 text-xs text-default-400">
                 v{plugin.version} · {plugin.author} · {plugin.capabilities.join(', ') || '无声明能力'}
               </p>
             </div>
@@ -314,11 +328,11 @@ function PluginCard({
       </CardHeader>
 
       {plugin.parametersSchema && Object.keys(plugin.parametersSchema).length > 0 && (
-        <CardBody className="px-3 pb-3 pt-0">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+        <CardBody className="px-4 pb-4 pt-0">
+          <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(plugin.parametersSchema).map(([key, schema]: [string, any]) => (
               <div key={key} className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">{schema.title || key}</label>
+                <label className="text-xs font-medium text-default-400">{schema.title || key}</label>
                 <input
                   type={schema.type === 'number' ? 'number' : 'text'}
                   defaultValue={schema.default ?? ''}
@@ -332,8 +346,8 @@ function PluginCard({
       )}
 
       {plugin.statusDetail && (
-        <CardBody className="px-3 pb-3 pt-0">
-          <div className="text-xs text-warning bg-warning-50 p-2 rounded">
+        <CardBody className="px-4 pb-4 pt-0">
+          <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
             {plugin.statusDetail}
           </div>
         </CardBody>

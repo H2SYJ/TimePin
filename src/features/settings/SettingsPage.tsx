@@ -14,7 +14,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="p-6">
+    <Card className="rounded-2xl border-divider bg-default-50/50 p-6">
       <div className="mb-5">
         <h2 className="text-base font-semibold">{title}</h2>
         <p className="mt-1 text-sm text-default-500">{description}</p>
@@ -73,10 +73,10 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+      <header className="flex items-center justify-between gap-4 px-8 py-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">软件设置</h1>
-          <p className="mt-1 text-sm text-default-500">
+          <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
+          <p className="mt-1.5 text-sm text-default-500">
             配置保存在本地应用数据目录，重启后自动恢复。
           </p>
         </div>
@@ -91,7 +91,7 @@ export function SettingsPage() {
         </div>
       </header>
 
-      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
+      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 pb-8">
         <div className="w-full min-w-0 space-y-5 pb-8">
           <Section title="外观与语言" description="调整界面主题和语言偏好。">
             <Field label="主题">
@@ -203,7 +203,7 @@ export function SettingsPage() {
             </Field>
           </Section>
 
-          <div className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary-50/60 px-4 py-3 text-sm text-default-500">
+          <div className="flex items-start gap-3 rounded-2xl border border-primary/25 bg-primary/[0.08] px-4 py-3 text-sm text-default-500">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
             <p>
               M1 阶段设置已持久化；插件目录、FFmpeg 自定义路径等高级项将在后续里程碑接入实际处理流程。

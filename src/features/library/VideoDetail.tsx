@@ -31,9 +31,9 @@ export function VideoDetail() {
 
   if (!video) {
     return (
-      <Card className="flex min-h-[220px] flex-col items-center justify-center gap-3 p-8 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-default-100 text-default-400">
-          <Film className="h-6 w-6" />
+      <Card className="flex min-h-[280px] flex-col items-center justify-center gap-4 rounded-2xl border-divider bg-default-50/50 p-8 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+          <Film className="h-7 w-7" />
         </div>
         <div>
           <p className="text-sm font-medium">尚未选择视频</p>
@@ -47,31 +47,33 @@ export function VideoDetail() {
   const sourcePath = video.sourcePath || video.path;
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="border-b border-divider bg-default-50 p-4">
+    <Card className="overflow-hidden rounded-2xl border-divider bg-default-50/50">
+      <CardHeader className="p-4 pb-0">
         <div className="flex w-full items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wider text-default-400">视频详情</p>
-            <h2 className="mt-1 truncate text-lg font-semibold" title={video.name}>{video.name}</h2>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-default-400">视频详情</p>
+            <h2 className="mt-1 truncate text-base font-semibold" title={video.name}>{video.name}</h2>
           </div>
-          <Badge className="shrink-0 bg-primary-50 text-primary">已导入</Badge>
+          <Badge className="shrink-0 border border-primary/30 bg-primary/10 text-primary">已导入</Badge>
         </div>
       </CardHeader>
 
-      <div className="aspect-video w-full bg-slate-950">
-        <video
-          key={video.id}
-          controls
-          preload="metadata"
-          src={videoSrc}
-          className="h-full w-full"
-          aria-label={`${video.name} 预览`}
-        >
-          您的运行环境不支持视频预览。
-        </video>
-      </div>
+      <CardBody className="p-4 pt-3">
+        <div className="aspect-video w-full overflow-hidden rounded-xl bg-black">
+          <video
+            key={video.id}
+            controls
+            preload="metadata"
+            src={videoSrc}
+            className="h-full w-full"
+            aria-label={`${video.name} 预览`}
+          >
+            您的运行环境不支持视频预览。
+          </video>
+        </div>
+      </CardBody>
 
-      <CardBody className="px-4 pb-2 pt-1">
+      <CardBody className="px-4 pb-2 pt-0">
         <MetaRow icon={Clock} label="时长" value={formatDuration(video.duration)} />
         <MetaRow
           icon={Monitor}
@@ -87,12 +89,12 @@ export function VideoDetail() {
         <MetaRow icon={FileVideo} label="导入时间" value={formatDate(video.importedAt)} />
       </CardBody>
 
-      <CardFooter className="border-t border-divider bg-default-50 p-4">
+      <CardFooter className="border-t border-divider/60 bg-background/40 p-4">
         <div className="w-full">
-          <p className="mb-2 text-xs font-medium text-default-400">源文件路径</p>
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-default-400">源文件路径</p>
           <div className="flex items-center gap-2">
             <code
-              className="min-w-0 flex-1 truncate rounded-md bg-background px-2 py-1.5 text-xs"
+              className="min-w-0 flex-1 truncate rounded-lg border border-divider bg-background px-2.5 py-1.5 font-mono text-xs"
               title={sourcePath}
             >
               {sourcePath}

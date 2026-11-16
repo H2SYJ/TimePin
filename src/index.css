@@ -8,37 +8,38 @@
   :root {
     --background: 210 20% 98%;
     --foreground: 222 24% 16%;
-    --primary: 217 91% 55%;
+    --primary: 246 82% 68%;
     --primary-foreground: 0 0% 100%;
     --secondary: 214 32% 95%;
     --secondary-foreground: 222 24% 24%;
     --muted: 214 32% 95%;
     --muted-foreground: 215 16% 47%;
     --accent: 214 95% 96%;
-    --accent-foreground: 217 91% 38%;
+    --accent-foreground: 246 82% 52%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
     --border: 214 25% 88%;
     --input: 214 25% 88%;
-    --ring: 217 91% 55%;
+    --ring: 246 82% 68%;
   }
 
   .dark {
-    --background: 222 28% 10%;
-    --foreground: 210 20% 96%;
-    --primary: 213 94% 62%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 217 24% 17%;
-    --secondary-foreground: 210 20% 92%;
-    --muted: 217 24% 17%;
-    --muted-foreground: 215 16% 64%;
-    --accent: 217 32% 21%;
-    --accent-foreground: 213 94% 76%;
-    --destructive: 0 63% 45%;
+    /* 方案 B：Linear/Raycast 级深色 — 近黑底 + 软卡片 + 紫罗兰强调 */
+    --background: 240 11% 6%;
+    --foreground: 240 12% 96%;
+    --primary: 246 82% 68%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 10% 11%;
+    --secondary-foreground: 240 12% 92%;
+    --muted: 240 10% 11%;
+    --muted-foreground: 240 8% 60%;
+    --accent: 240 12% 14%;
+    --accent-foreground: 246 82% 78%;
+    --destructive: 0 62% 52%;
     --destructive-foreground: 0 0% 100%;
-    --border: 217 20% 24%;
-    --input: 217 20% 24%;
-    --ring: 213 94% 62%;
+    --border: 240 8% 14%;
+    --input: 240 8% 14%;
+    --ring: 246 82% 68%;
   }
 
   * {
