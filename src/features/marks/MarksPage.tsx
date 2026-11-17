@@ -85,7 +85,6 @@ function MarksWorkspace({ video }: { video: VideoInfo }) {
     if (!element) return;
     const valid = Number.isFinite(element.duration) && element.duration > 0;
     setDuration(valid ? element.duration : 0);
-    setMetadataReady(true);
     if (Number.isFinite(element.currentTime)) setCurrentTime(element.currentTime);
   };
 
@@ -127,7 +126,7 @@ function MarksWorkspace({ video }: { video: VideoInfo }) {
           <Card className="overflow-hidden rounded-2xl border-divider bg-default-50/50 p-3">
             <video ref={player} controls preload="metadata" src={fileSrc(video.path)} aria-label={`${video.name} 标注播放器`}
               className="aspect-video max-h-[55vh] w-full rounded-xl bg-default-100"
-              onLoadedMetadata={syncMetadata} onDurationChange={syncMetadata}
+              onLoadedMetadata={() => { syncMetadata(); setMetadataReady(true); }} onDurationChange={syncMetadata}
               onTimeUpdate={() => {
                 const time = player.current?.currentTime;
                 if (time !== undefined && Number.isFinite(time)) setCurrentTime(time);
