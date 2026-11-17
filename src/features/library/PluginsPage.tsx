@@ -1,8 +1,9 @@
 import { Card, CardBody, CardHeader, Button, Badge } from '@/components/ui';
 import { useEffect, useState } from 'react';
+import type { PluginInfo, VideoInfo } from '@/types';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
-import type { OrchestrationMode, OrchestrationResult, PluginInfo, VideoInfo } from '@/types';
+import type { OrchestrationMode, OrchestrationResult } from '@/types';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -20,8 +21,26 @@ export function PluginsPage() {
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null);
 
   useEffect(() => {
-    loadPlugins();
-    setupEventListeners();
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+
+    void setupEventListeners()
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          cleanup = unlisten;
+        }
+      })
+      .catch((error) => {
+        if (!disposed) console.error('注册插件事件监听失败:', error);
+      });
+    void loadPlugins();
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
   }, []);
 
   const loadPlugins = async () => {
@@ -36,56 +55,62 @@ export function PluginsPage() {
     }
   };
 
-  const setupEventListeners = async () => {
-    const unlistenProgress = await api.onPluginProgress((e) => {
-      setRunningTasks((prev) => ({
-        ...prev,
-        [e.taskId]: { progress: e.progress, message: e.message || '' },
-      }));
-    });
-    const unlistenStatus = await api.onPluginStatus((e) => {
-      setPlugins((prev) =>
-        prev.map((p) =>
-          p.name === e.pluginName
-            ? {
-                ...p,
-                status: e.status as PluginInfo['status'],
-                statusDetail: e.detail || null,
-              }
-            : p
-        )
-      );
-    });
-    const unlistenLog = await api.onPluginLog((e) => {
-      setLogs((prev) => [...prev.slice(-99), `[${e.level.toUpperCase()}] ${e.pluginName}: ${e.message}`]);
-    });
-    const unlistenResult = await api.onPluginResult((e) => {
-      setRunningTasks((prev) => {
-        const next = { ...prev };
-        delete next[e.taskId];
-        return next;
+  const setupEventListeners = async (): Promise<() => void> => {
+    const unlisteners: Array<() => void> = [];
+    try {
+      const unlistenProgress = await api.onPluginProgress((e) => {
+        setRunningTasks((prev) => ({
+          ...prev,
+          [e.taskId]: { progress: e.progress, message: e.message || '' },
+        }));
       });
-      if (e.outcome === 'ok') {
-        setLogs((prev) => [...prev.slice(-99), `[OK] ${e.pluginName}: 生成 ${e.marksCount} 个标注`]);
-      } else if (e.outcome === 'crashed') {
-        setLogs((prev) => [...prev.slice(-99), `[CRASHED] ${e.pluginName}: ${e.error}`]);
-      } else if (e.outcome === 'error') {
-        setLogs((prev) => [...prev.slice(-99), `[ERROR] ${e.pluginName}: ${e.error}`]);
-      }
-    });
-    const unlistenOrchestration = await api.onPluginOrchestration((e) => {
-      setOrchestrationProgress({ completed: e.completed, total: e.total, stage: e.stage });
-      if (e.stage === 'finished') {
-        setOrchestrationRunning(false);
-      }
-    });
-    return () => {
-      unlistenProgress();
-      unlistenStatus();
-      unlistenLog();
-      unlistenResult();
-      unlistenOrchestration();
-    };
+      unlisteners.push(unlistenProgress);
+
+      const unlistenStatus = await api.onPluginStatus((e) => {
+        setPlugins((prev) =>
+          prev.map((p) =>
+            p.name === e.pluginName
+              ? { ...p, status: e.status as PluginInfo['status'], statusDetail: e.detail || null }
+              : p
+          )
+        );
+      });
+      unlisteners.push(unlistenStatus);
+
+      const unlistenLog = await api.onPluginLog((e) => {
+        setLogs((prev) => [...prev.slice(-99), `[${e.level.toUpperCase()}] ${e.pluginName}: ${e.message}`]);
+      });
+      unlisteners.push(unlistenLog);
+
+      const unlistenResult = await api.onPluginResult((e) => {
+        setRunningTasks((prev) => {
+          const next = { ...prev };
+          delete next[e.taskId];
+          return next;
+        });
+        if (e.outcome === 'ok') {
+          setLogs((prev) => [...prev.slice(-99), `[OK] ${e.pluginName}: 生成 ${e.marksCount} 个标注`]);
+        } else if (e.outcome === 'crashed') {
+          setLogs((prev) => [...prev.slice(-99), `[CRASHED] ${e.pluginName}: ${e.error}`]);
+        } else if (e.outcome === 'error') {
+          setLogs((prev) => [...prev.slice(-99), `[ERROR] ${e.pluginName}: ${e.error}`]);
+        }
+      });
+      unlisteners.push(unlistenResult);
+
+      const unlistenOrchestration = await api.onPluginOrchestration((e) => {
+        setOrchestrationProgress({ completed: e.completed, total: e.total, stage: e.stage });
+        if (e.stage === 'finished') {
+          setOrchestrationRunning(false);
+        }
+      });
+      unlisteners.push(unlistenOrchestration);
+
+      return () => unlisteners.forEach((unlisten) => unlisten());
+    } catch (error) {
+      unlisteners.forEach((unlisten) => unlisten());
+      throw error;
+    }
   };
 
   const handleReload = async () => {
@@ -115,8 +140,9 @@ export function PluginsPage() {
         delete next[taskId];
         return next;
       });
-    } catch (e: any) {
-      setLogs((prev) => [...prev, `[ERROR] ${e.message}`]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLogs((prev) => [...prev, `[ERROR] ${message}`]);
       setRunningTasks((prev) => {
         const next = { ...prev };
         delete next[taskId];
@@ -468,7 +494,7 @@ function PluginCard({
                 运行
               </Button>
             )}
-            {isCrashed && (
+            {isCrashed && selectedVideo && (
               <Button variant="secondary" size="sm" onClick={() => onRun(plugin, selectedVideo)}>
                 <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
                 重试

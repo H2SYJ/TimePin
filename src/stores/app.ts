@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { applyTheme as applyDocumentTheme } from '@/lib/theme';
 import { api } from '@/lib/ipc';
 import type { Settings, Theme, VideoInfo } from '@/types';
 
@@ -19,18 +20,8 @@ const defaultSettings: Settings = {
   windowState: null,
 };
 
-function systemPrefersDark(): boolean {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-color-scheme: dark)').matches;
-}
-
 function applyTheme(theme: Theme): void {
-  if (typeof document === 'undefined') return;
-  document.documentElement.classList.toggle(
-    'dark',
-    theme === 'dark' || (theme === 'system' && systemPrefersDark()),
-  );
+  applyDocumentTheme(theme);
 }
 
 interface AppState {

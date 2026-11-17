@@ -1,11 +1,16 @@
-import { Suspense, useEffect } from 'react';
+import { lazy, Suspense, useCallback, useEffect } from 'react';
 import { Sidebar } from '@/components/Sidebar';
-import { LibraryPage } from '@/features/library/LibraryPage';
-import { MarksPage } from '@/features/marks/MarksPage';
-import { PluginsPage } from '@/features/library/PluginsPage';
-import { SettingsPage } from '@/features/settings/SettingsPage';
+import { api } from '@/lib/ipc';
+import { listenToSystemTheme } from '@/lib/theme';
+import { type ShortcutAction } from '@/lib/shortcuts';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useAppStore } from '@/stores/app';
 import { cn } from '@/lib/utils';
+
+const LibraryPage = lazy(() => import('@/features/library/LibraryPage').then(({ LibraryPage }) => ({ default: LibraryPage })));
+const MarksPage = lazy(() => import('@/features/marks/MarksPage').then(({ MarksPage }) => ({ default: MarksPage })));
+const PluginsPage = lazy(() => import('@/features/library/PluginsPage').then(({ PluginsPage }) => ({ default: PluginsPage })));
+const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then(({ SettingsPage }) => ({ default: SettingsPage })));
 
 function PageWrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -35,7 +40,29 @@ function ErrorBoundary({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const { page, initialize, loading } = useAppStore();
+  const page = useAppStore((state) => state.page);
+  const initialize = useAppStore((state) => state.initialize);
+  const loading = useAppStore((state) => state.loading);
+  const importPaths = useAppStore((state) => state.importPaths);
+  const setPage = useAppStore((state) => state.setPage);
+
+  const openVideoPicker = useCallback(async () => {
+    try {
+      await importPaths(await api.pickVideoFiles());
+    } catch (error) {
+      useAppStore.setState({ error: String(error) });
+    }
+  }, [importPaths]);
+
+  const navigateFromShortcut = useCallback((action: Exclude<ShortcutAction, 'import'>) => {
+    if (action === 'openSettings') {
+      setPage('settings');
+    } else {
+      setPage(action);
+    }
+  }, [setPage]);
+
+  useKeyboardShortcuts({ onImport: openVideoPicker, onNavigate: navigateFromShortcut });
 
   useEffect(() => {
     let mounted = true;
@@ -49,6 +76,11 @@ export default function App() {
       mounted = false;
     };
   }, [initialize]);
+
+  useEffect(() => listenToSystemTheme(() => {
+    const state = useAppStore.getState();
+    if (state.settings.theme === 'system') state.applyTheme();
+  }), []);
 
   if (loading) return <Loading />;
 
