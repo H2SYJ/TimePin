@@ -5,6 +5,13 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+            }
+
             crate::core::init(app.handle())?;
 
             // Discover bundled, app-owned and saved custom roots without starting processes.
@@ -25,6 +32,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            crate::commands::updater::get_updater_config,
             crate::commands::settings::get_settings,
             crate::commands::settings::save_settings,
             crate::commands::settings::validate_dependencies,
@@ -56,6 +64,9 @@ pub fn run() {
             crate::commands::recognition::recognition_roi_load,
             crate::commands::recognition::recognition_roi_list,
             crate::commands::recognition::recognition_configure,
+            // GitHub 插件发现命令
+            crate::commands::github_plugins::discover_github_plugins,
+            crate::commands::github_plugins::install_github_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

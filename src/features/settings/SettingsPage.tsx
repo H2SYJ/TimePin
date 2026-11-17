@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Card, Input, Label, Select, SelectItem, Switch } from '@/components/ui';
+import { UpdatePanel } from '@/components/UpdatePanel';
 import { useAppStore } from '@/stores/app';
 import { isTauri } from '@/lib/ipc';
 import type { ExportMode, Settings, Theme } from '@/types';
@@ -307,6 +308,8 @@ export function SettingsPage() {
               </div>
             </Field>
           </Section>
+
+          <UpdatePanel />
 
           <AdvancedSettings
             draft={draft}

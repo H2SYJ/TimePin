@@ -16,6 +16,7 @@ import type {
   PluginInfo,
   PluginResult,
   Settings,
+  UpdaterConfig,
   VideoInfo,
   VideoMetadata,
   // M3 识别类型
@@ -31,6 +32,9 @@ import type {
   RecognitionRoiSaveParams,
   RecognitionRoiLoadParams,
   RecognitionConfigureParams,
+  // GitHub 插件发现类型
+  DiscoverPluginsResult,
+  InstallPluginParams,
 } from '@/types';
 
 export function isTauri(): boolean {
@@ -134,6 +138,12 @@ export const api = {
       throw new Error('元数据读取需要在 TimePin 桌面应用中运行');
     }
     return tauriInvoke<VideoMetadata>('get_video_metadata', { path });
+  },
+
+  /** 检查发布配置是否启用了应用内更新。 */
+  async getUpdaterConfig(): Promise<UpdaterConfig> {
+    if (!isTauri()) return { schemaVersion: '1.0.0', configured: false };
+    return tauriInvoke<UpdaterConfig>('get_updater_config');
   },
 
   async generateThumbnail(videoPath: string, videoId: string): Promise<string> {
@@ -324,5 +334,29 @@ export const api = {
   ): Promise<UnlistenFn> {
     if (!isTauri()) return () => {};
     return tauriListen('recognition://progress', (e: any) => handler(e.payload));
+  },
+
+  // GitHub 插件发现 API
+  async discoverGitHubPlugins(
+    page?: number,
+    perPage?: number,
+    githubToken?: string,
+  ): Promise<DiscoverPluginsResult> {
+    if (!isTauri()) {
+      return { plugins: [], totalCount: 0, rateLimitRemaining: null, rateLimitReset: null };
+    }
+    return tauriInvoke<DiscoverPluginsResult>('discover_github_plugins', { page, per_page: perPage, github_token: githubToken });
+  },
+
+  async installGitHubPlugin(params: InstallPluginParams): Promise<string> {
+    if (!isTauri()) {
+      throw new Error('插件安装需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<string>('install_github_plugin', {
+      owner: params.owner,
+      repo: params.repo,
+      branch: params.branch,
+      github_token: params.githubToken,
+    });
   },
 };
