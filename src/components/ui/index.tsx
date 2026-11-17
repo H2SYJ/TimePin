@@ -6,6 +6,11 @@ import {
   CardFooter,
   CardHeader,
   Input as HeroInput,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
   Select as HeroSelect,
   SelectItem,
   Switch as HeroSwitch,
@@ -15,6 +20,7 @@ import {
   type ButtonProps as HeroButtonProps,
   type CardProps as HeroCardProps,
   type InputProps as HeroInputProps,
+  type ModalProps,
   type SelectProps as HeroSelectProps,
   type SwitchProps as HeroSwitchProps,
   type ChipProps,
@@ -130,6 +136,8 @@ export function Select({ className, variant = 'bordered', radius = 'md', childre
 
 export { SelectItem };
 export const SelectOption = SelectItem;
+export { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader };
+export type { ModalProps };
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return <label className={cn('text-sm font-medium text-foreground', className)} {...props} />;
@@ -166,6 +174,36 @@ export function Badge({ className, children, ...props }: ChipProps) {
     >
       {children}
     </Chip>
+  );
+}
+
+export interface ProgressProps {
+  value: number | null;
+  label?: string;
+  className?: string;
+}
+
+export function Progress({ value, label, className }: ProgressProps) {
+  const percent = value == null ? null : Math.max(0, Math.min(100, value));
+  return (
+    <div className={cn('space-y-1', className)}>
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? undefined}
+        className="h-2 w-full overflow-hidden rounded-full bg-default-100"
+      >
+        <div
+          className={cn(
+            'h-full rounded-full bg-primary transition-[width] duration-200',
+            percent == null && 'w-1/3 animate-pulse',
+          )}
+          style={percent == null ? undefined : { width: `${percent}%` }}
+        />
+      </div>
+    </div>
   );
 }
 

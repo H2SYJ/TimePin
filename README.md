@@ -343,3 +343,4 @@ kill -9 <PID>
 
 - [架构说明](docs/architecture.md) — 分层、模块职责、数据流、缺口
 - [插件协议](docs/plugin-protocol.md) — PluginManifest / PluginResult / JSON-RPC 协议
+- [发布流程](docs/releasing.md) — 签名更新器、密钥配置、草稿 Release 与人工发布边界

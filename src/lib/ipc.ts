@@ -12,6 +12,7 @@ import type {
   PluginInfo,
   PluginResult,
   Settings,
+  UpdaterConfig,
   VideoInfo,
   VideoMetadata,
   // M3 识别类型
@@ -93,6 +94,12 @@ export const api = {
       throw new Error('元数据读取需要在 TimePin 桌面应用中运行');
     }
     return tauriInvoke<VideoMetadata>('get_video_metadata', { path });
+  },
+
+  /** 检查发布配置是否启用了应用内更新。 */
+  async getUpdaterConfig(): Promise<UpdaterConfig> {
+    if (!isTauri()) return { schemaVersion: '1.0.0', configured: false };
+    return tauriInvoke<UpdaterConfig>('get_updater_config');
   },
 
   async generateThumbnail(videoPath: string, videoId: string): Promise<string> {

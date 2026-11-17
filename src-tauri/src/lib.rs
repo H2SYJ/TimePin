@@ -5,6 +5,13 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+            }
+
             crate::core::init(app.handle())?;
 
             // 插件管理器：扫描内置 plugins/ + 设置中的 customPluginDirs。
@@ -30,6 +37,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            crate::commands::updater::get_updater_config,
             crate::commands::settings::get_settings,
             crate::commands::settings::save_settings,
             crate::commands::library::import_video,

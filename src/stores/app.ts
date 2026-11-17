@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { applyTheme as applyDocumentTheme } from '@/lib/theme';
 import { api } from '@/lib/ipc';
+import { useUpdateStore } from '@/stores/updater';
 import type { Settings, Theme, VideoInfo } from '@/types';
 
 type Page = 'library' | 'marks' | 'plugins' | 'settings';
@@ -100,6 +101,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   async importPaths(paths) {
     if (paths.length === 0) return;
     set({ importing: true, error: null, notice: null });
+    const workToken = useUpdateStore.getState().beginWork('import');
     const failures: string[] = [];
     let imported = 0;
     let skipped = 0;
@@ -140,6 +142,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     } catch (error) {
       set({ importing: false, error: String(error) });
+    } finally {
+      useUpdateStore.getState().endWork(workToken);
     }
   },
 
