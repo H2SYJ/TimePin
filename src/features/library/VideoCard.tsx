@@ -2,7 +2,7 @@ import { Film, ImageOff, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, Button, Card, CardBody } from '@/components/ui';
 import { fileSrc } from '@/lib/ipc';
-import { formatDuration, formatFileSize } from '@/lib/utils';
+import { cn, formatDuration, formatFileSize } from '@/lib/utils';
 import { useAppStore } from '@/stores/app';
 import type { VideoInfo } from '@/types';
 
@@ -49,11 +49,16 @@ export function VideoCard({ video }: { video: VideoInfo }) {
           selectVideo(video.id);
         }
       }}
-      className={`group cursor-pointer overflow-hidden ${selected ? 'border-primary ring-2 ring-primary/20' : ''}`}
+      className={cn(
+        'group cursor-pointer overflow-hidden rounded-2xl',
+        selected
+          ? 'border-primary bg-primary/[0.06] ring-2 ring-primary/30'
+          : 'border-divider bg-default-50/50 hover:border-default-300 hover:bg-default-100/60',
+      )}
     >
-      <div className="relative aspect-video overflow-hidden border-b border-divider bg-default-100">
+      <div className="relative aspect-video overflow-hidden bg-default-100">
         <Thumbnail video={video} />
-        <span className="absolute bottom-2 right-2 rounded-md bg-slate-950/75 px-2 py-1 text-xs font-medium tabular-nums text-white">
+        <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium tabular-nums text-white backdrop-blur-sm">
           {formatDuration(video.duration)}
         </span>
       </div>
@@ -72,7 +77,7 @@ export function VideoCard({ video }: { video: VideoInfo }) {
           <span>{formatFileSize(video.fileSize)}</span>
         </div>
 
-        <div className="flex items-center justify-between border-t border-divider pt-3">
+        <div className="flex items-center justify-between border-t border-divider/60 pt-3">
           <span
             className="truncate text-xs text-default-400"
             title={video.sourcePath || video.path}
@@ -107,7 +112,7 @@ export function VideoCard({ video }: { video: VideoInfo }) {
               variant="ghost"
               aria-label={`从媒体库移除 ${video.name}（不会删除原文件）`}
               title="从媒体库移除，不会删除原文件"
-              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
               onPress={() => setConfirmDelete(true)}
               onClick={(event) => event.stopPropagation()}
             >
