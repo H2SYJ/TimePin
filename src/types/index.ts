@@ -346,3 +346,50 @@ export interface MarksDocument {
   videoId: string;
   marks: Mark[];
 }
+
+/** ========== GitHub 插件发现类型 ========== */
+
+export interface RemotePluginRepository {
+  name: string;
+  fullName: string;
+  description: string | null;
+  htmlUrl: string;
+  cloneUrl: string;
+  stargazersCount: number;
+  forksCount: number;
+  updatedAt: string;
+  language: string | null;
+  topics: string[];
+  owner: {
+    login: string;
+    avatarUrl: string;
+    htmlUrl: string;
+  };
+  defaultBranch: string;
+}
+
+export type PluginVerification = 'verified' | 'community' | 'unverified';
+
+export interface DiscoveredPlugin {
+  repository: RemotePluginRepository;
+  /** 复用同文件上方 PluginManifest 定义 */
+  manifest: PluginManifest | null;
+  manifestError: string | null;
+  isInstalled: boolean;
+  localPath: string | null;
+  verification: PluginVerification;
+}
+
+export interface DiscoverPluginsResult {
+  plugins: DiscoveredPlugin[];
+  totalCount: number;
+  rateLimitRemaining: number | null;
+  rateLimitReset: number | null;
+}
+
+export interface InstallPluginParams {
+  owner: string;
+  repo: string;
+  branch?: string;
+  githubToken?: string;
+}

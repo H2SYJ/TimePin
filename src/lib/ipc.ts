@@ -28,6 +28,9 @@ import type {
   RecognitionRoiSaveParams,
   RecognitionRoiLoadParams,
   RecognitionConfigureParams,
+  // GitHub 插件发现类型
+  DiscoverPluginsResult,
+  InstallPluginParams,
 } from '@/types';
 
 export function isTauri(): boolean {
@@ -287,5 +290,29 @@ export const api = {
   ): Promise<UnlistenFn> {
     if (!isTauri()) return () => {};
     return tauriListen('recognition://progress', (e: any) => handler(e.payload));
+  },
+
+  // GitHub 插件发现 API
+  async discoverGitHubPlugins(
+    page?: number,
+    perPage?: number,
+    githubToken?: string,
+  ): Promise<DiscoverPluginsResult> {
+    if (!isTauri()) {
+      return { plugins: [], totalCount: 0, rateLimitRemaining: null, rateLimitReset: null };
+    }
+    return tauriInvoke<DiscoverPluginsResult>('discover_github_plugins', { page, per_page: perPage, github_token: githubToken });
+  },
+
+  async installGitHubPlugin(params: InstallPluginParams): Promise<string> {
+    if (!isTauri()) {
+      throw new Error('插件安装需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<string>('install_github_plugin', {
+      owner: params.owner,
+      repo: params.repo,
+      branch: params.branch,
+      github_token: params.githubToken,
+    });
   },
 };

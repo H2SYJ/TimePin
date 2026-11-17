@@ -9,7 +9,7 @@ use crate::plugins::orchestrator::{OrchestrationRequest, OrchestrationResult, Pl
 use crate::plugins::runtime::PluginProcessError;
 use crate::plugins::PluginError;
 
-fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
+pub fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
     let mut dirs = PluginManager::builtin_plugin_dirs(app);
     if let Ok(settings) = crate::core::settings::load_settings(app) {
         dirs.extend(settings.custom_plugin_dirs);

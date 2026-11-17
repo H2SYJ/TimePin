@@ -1,4 +1,5 @@
 pub mod formats;
+pub mod github_plugins;
 pub mod library;
 pub mod marks;
 pub mod plugins;
