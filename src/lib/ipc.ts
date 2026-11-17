@@ -5,6 +5,7 @@ import type {
   ExportMode,
   ImportResult,
   Mark,
+  MarksDocument,
   OrchestrationProgress,
   OrchestrationRequest,
   OrchestrationResult,
@@ -124,6 +125,16 @@ export const api = {
       outputDir,
       exportMode,
     });
+  },
+
+  async getMarks(videoId: string): Promise<MarksDocument> {
+    if (!isTauri()) return { schemaVersion: '1.0.0', videoId, marks: [] };
+    return tauriInvoke<MarksDocument>('get_marks', { videoId });
+  },
+
+  async saveMarks(videoId: string, marks: Mark[]): Promise<MarksDocument> {
+    if (!isTauri()) return { schemaVersion: '1.0.0', videoId, marks };
+    return tauriInvoke<MarksDocument>('save_marks', { videoId, marks });
   },
 
   // 插件系统 API (M2)

@@ -333,6 +333,13 @@ export interface RecognitionConfigureParams {
   templates?: Record<string, unknown>;
 }
 
+/** 应用数据目录内按视频持久化的标注文档（时间单位：秒）。 */
+export interface MarksDocument {
+  schemaVersion: '1.0.0';
+  videoId: string;
+  marks: Mark[];
+}
+
 /** ========== GitHub 插件发现类型 ========== */
 
 export interface RemotePluginRepository {
