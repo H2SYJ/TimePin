@@ -37,6 +37,8 @@ pub fn run() {
             crate::commands::library::delete_video,
             crate::commands::library::get_video_metadata,
             crate::commands::library::generate_thumbnail,
+            crate::commands::marks::get_marks,
+            crate::commands::marks::save_marks,
             crate::commands::formats::generate_txt_chapters,
             crate::commands::formats::generate_csv_markers,
             crate::commands::formats::export_segments,
