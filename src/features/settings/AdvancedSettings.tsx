@@ -189,7 +189,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
               </li>;
             })}
           </ul>
-          <p className="text-xs text-default-500">安装固定版本 b6.1.1（FFmpeg 6.1.1），下载经 SHA-256 校验。仅写入应用数据目录，不修改系统 PATH，无需管理员权限；成功后自动保存两个工具路径，其它未保存设置保持不变。</p>
+          <p className="text-xs text-default-500">安装固定版本 b6.1.1（FFmpeg 6.1.1），下载经 SHA-256 校验。写入软件安装目录下的 dependencies 子目录，不修改系统 PATH；若安装目录受管理员权限保护，请以管理员身份运行应用或使用默认 PATH 中的 FFmpeg。成功后自动保存两个工具路径，其它未保存设置保持不变。</p>
           <p className="break-all text-xs text-default-500">依赖安装目录：{info?.installDirectory ?? (desktop ? '正在读取…' : '仅桌面应用可用')}</p>
           {installer.progress && <div role="status" className="space-y-2 rounded-lg bg-default-100 p-3 text-sm" aria-live="polite">
             <p>{stages[installer.progress.stage]} · {Math.round(installer.progress.progress * 100)}% — {installer.progress.message}</p>

@@ -1,4 +1,4 @@
-//! Pinned, per-user FFmpeg/ffprobe installation into `app_data/tools/ffmpeg`.
+//! Pinned FFmpeg/ffprobe installation into `dependencies/ffmpeg` next to the executable.
 //!
 //! Downloaded bytes are hashed BEFORE decompression and never executed; only
 //! after the compressed SHA-256 matches the reviewed b6.1.1 release manifest do
@@ -83,7 +83,7 @@ fn progress(
     }
 }
 
-/// 依赖安装根目录：`app_data/tools/ffmpeg`。
+/// 依赖安装根目录：应用可执行文件旁的 `dependencies/ffmpeg`。
 ///
 /// 供 `AdvancedSettingsInfo.installDirectory` 展示使用 —— 返回 PathBuf 而非
 /// Result，因为该字段只是给 UI 显示路径的字符串；解析失败时退回 `"."`，
@@ -91,22 +91,21 @@ fn progress(
 ///
 /// 实际安装路径必须经过 `install_root_strict()`，以保证二进制永不写到 CWD。
 pub fn install_directory(app_handle: &AppHandle) -> PathBuf {
-    app_handle
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("tools")
-        .join("ffmpeg")
+    install_root_from_exe(app_handle).unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// 安装时必须使用的严格版本：任何 app_data_dir 解析失败都返回错误，绝不静默
-/// 写入 CWD。
+/// 安装时必须使用的严格版本：任何解析失败都返回错误，绝不静默写入 CWD。
 fn install_root_strict(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    app_handle
-        .path()
-        .app_data_dir()
-        .map(|dir| dir.join("tools").join("ffmpeg"))
-        .map_err(|error| format!("无法解析应用数据目录：{error}"))
+    install_root_from_exe(app_handle)
+}
+
+/// Resolve `dependencies/ffmpeg` next to the running executable.
+fn install_root_from_exe(_app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .ok_or_else(|| "无法定位可执行文件目录".to_string())?;
+    Ok(exe_dir.join("dependencies").join("ffmpeg"))
 }
 
 /// Process-wide install mutex. Acquired before any network or settings write;

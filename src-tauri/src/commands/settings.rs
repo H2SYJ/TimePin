@@ -62,8 +62,6 @@ pub async fn get_advanced_settings_info(
     Ok(AdvancedSettingsInfo {
         schema_version: SCHEMA_VERSION.to_string(),
         default_plugin_directory: crate::core::get_default_plugins_dir(&app_handle),
-        install_directory: crate::core::get_app_data_dir(&app_handle)
-            .join("tools")
-            .join("ffmpeg"),
+        install_directory: crate::core::dependencies::install_directory(&app_handle),
     })
 }
