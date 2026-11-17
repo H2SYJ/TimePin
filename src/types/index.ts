@@ -178,6 +178,57 @@ export interface PluginRunFinished {
   marksCount: number;
 }
 
+/** ========== M4：多插件编排 ========== */
+
+export type OrchestrationMode = 'sequential' | 'parallel';
+
+export interface OrchestrationRequest {
+  pluginNames: string[];
+  videos: VideoInfo[];
+  perPluginParams?: Record<string, Record<string, unknown>>;
+  defaultParams?: Record<string, unknown>;
+  outputDir: string;
+  mode?: OrchestrationMode;
+  mergeEpsilonSecs?: number;
+  maxConcurrency?: number;
+}
+
+export interface PluginRunOutcome {
+  pluginName: string;
+  videoId: string;
+  // ok | error | crashed | skipped
+  outcome: string;
+  error?: string;
+  marks: Mark[];
+  taskId: string;
+}
+
+export interface VideoRunSummary {
+  videoId: string;
+  marks: Mark[];
+  pluginResults: PluginRunOutcome[];
+}
+
+export interface OrchestrationResult {
+  schemaVersion: string;
+  batchId: string;
+  videoSummaries: VideoRunSummary[];
+  totalMarks: number;
+  failedCount: number;
+}
+
+export interface OrchestrationProgress {
+  schemaVersion: string;
+  batchId: string;
+  // started | running | video_done | finished | cancelled
+  stage: string;
+  completed: number;
+  total: number;
+  currentVideoId?: string;
+  currentPluginName?: string;
+  lastOutcome?: PluginRunOutcome;
+}
+
 /** ========== 识别服务类型（M3） ========== */
 
 export interface NormalizedRect {

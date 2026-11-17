@@ -23,7 +23,8 @@ pub fn run() {
             app.manage(manager);
 
             // 识别服务状态
-            let recognition_state = crate::commands::recognition::RecognitionState::new(app.handle());
+            let recognition_state =
+                crate::commands::recognition::RecognitionState::new(app.handle());
             app.manage(recognition_state);
 
             Ok(())
@@ -42,6 +43,7 @@ pub fn run() {
             crate::commands::plugins::get_plugins,
             crate::commands::plugins::reload_plugins,
             crate::commands::plugins::run_plugin,
+            crate::commands::plugins::run_plugins,
             crate::commands::plugins::stop_plugin,
             crate::commands::plugins::cancel_plugin_run,
             // M3 识别服务命令
