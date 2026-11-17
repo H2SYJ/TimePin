@@ -22,6 +22,10 @@ pub fn run() {
                 crate::plugins::manager::PluginManager::discover(app.handle(), &plugin_dirs);
             app.manage(manager);
 
+            // 识别服务状态
+            let recognition_state = crate::commands::recognition::RecognitionState::new(app.handle());
+            app.manage(recognition_state);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -40,6 +44,15 @@ pub fn run() {
             crate::commands::plugins::run_plugin,
             crate::commands::plugins::stop_plugin,
             crate::commands::plugins::cancel_plugin_run,
+            // M3 识别服务命令
+            crate::commands::recognition::recognition_template_match,
+            crate::commands::recognition::recognition_ocr,
+            crate::commands::recognition::recognition_detect,
+            crate::commands::recognition::recognition_preview,
+            crate::commands::recognition::recognition_roi_save,
+            crate::commands::recognition::recognition_roi_load,
+            crate::commands::recognition::recognition_roi_list,
+            crate::commands::recognition::recognition_configure,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

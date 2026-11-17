@@ -1,0 +1,50 @@
+{
+  "protocolVersion": "1.0.0",
+  "name": "timepin-recognition",
+  "version": "0.1.0",
+  "description": "TimePin 识别服务 Sidecar：提供模板匹配、OCR、目标检测、ROI 管理、调试预览等识别原语。供插件通过 JSON-RPC 调用。",
+  "author": "TimePin Team",
+  "entry": "main.py",
+  "runtime": "python",
+  "capabilities": ["videoFrames", "fileWrite", "gpu", "network"],
+  "parametersSchema": {
+    "ocr": {
+      "type": "object",
+      "title": "OCR 配置",
+      "properties": {
+        "use_angle_cls": { "type": "boolean", "default": true, "title": "使用角度分类" },
+        "lang": { "type": "string", "default": "ch", "title": "语言" },
+        "use_gpu": { "type": "boolean", "default": false, "title": "使用 GPU" }
+      }
+    },
+    "detector": {
+      "type": "object",
+      "title": "目标检测配置",
+      "properties": {
+        "model_path": { "type": "string", "title": "ONNX 模型路径" },
+        "class_names": { "type": "array", "items": { "type": "string" }, "title": "类别名称列表" },
+        "conf_threshold": { "type": "number", "default": 0.25, "title": "置信度阈值" },
+        "iou_threshold": { "type": "number", "default": 0.45, "title": "IOU 阈值" },
+        "use_gpu": { "type": "boolean", "default": false, "title": "使用 GPU" }
+      }
+    },
+    "templates": {
+      "type": "object",
+      "title": "模板配置",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "imagePath": { "type": "string", "title": "模板图片路径" },
+          "maskPath": { "type": "string", "title": "可选掩码图片路径" }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "templateMatch": "matches[] — {rect, confidence, scale, templateName, timestamp}",
+    "ocr": "results[] — {rect, text, confidence, timestamp}",
+    "detect": "results[] — {rect, label, confidence, classId, timestamp}",
+    "preview": "frame — {timestamp, imageBase64, width, height}",
+    "roi": "rect — {x, y, width, height} (normalized 0-1)"
+  }
+}
