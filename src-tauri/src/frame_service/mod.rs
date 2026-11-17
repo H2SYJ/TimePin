@@ -213,7 +213,11 @@ pub struct FrameService {
 impl FrameService {
     /// 构造服务实例。三个路径都必须是已存在/可创建的路径。
     /// 会立即 canonicalize 并缓存，后续 extract 只做字符串/前缀比较。
-    pub fn new(ffmpeg_path: PathBuf, video_path: PathBuf, output_dir: PathBuf) -> Result<Self, FrameServiceError> {
+    pub fn new(
+        ffmpeg_path: PathBuf,
+        video_path: PathBuf,
+        output_dir: PathBuf,
+    ) -> Result<Self, FrameServiceError> {
         let video_path = video_path.canonicalize().map_err(|e| {
             FrameServiceError::PathNotFound(format!("video_path {}: {e}", video_path.display()))
         })?;
@@ -232,13 +236,19 @@ impl FrameService {
     /// 流程：校验请求 → 校验路径授权 → 创建 UUID scratch 子目录 →
     /// 按 mode 分发 image2 或 keyframes → 收集真实 PTS 与文件路径 →
     /// 按 delivery 返回 files 或 base64。
-    pub fn extract(&self, request: FrameExtractRequest) -> Result<FrameExtractResult, FrameServiceError> {
+    pub fn extract(
+        &self,
+        request: FrameExtractRequest,
+    ) -> Result<FrameExtractResult, FrameServiceError> {
         // 1. 协议版本兼容（major 相同即兼容；0.x 要求完全一致）
         self.check_protocol_version(&request.protocol_version)?;
 
         // 2. 路径授权：video_path 必须是构造时的同一文件（严格比较）
         let req_video = request.video_path.canonicalize().map_err(|e| {
-            FrameServiceError::PathNotFound(format!("video_path {}: {e}", request.video_path.display()))
+            FrameServiceError::PathNotFound(format!(
+                "video_path {}: {e}",
+                request.video_path.display()
+            ))
         })?;
         if req_video != self.video_path {
             return Err(FrameServiceError::UnauthorizedVideoPath);
@@ -422,8 +432,7 @@ impl FrameService {
         };
 
         // 1. 解析本地 MP4 索引
-        let index = mp4::read_index(&self.video_path)
-            .map_err(FrameServiceError::IndexParse)?;
+        let index = mp4::read_index(&self.video_path).map_err(FrameServiceError::IndexParse)?;
 
         // 2. 过滤关键帧：时间范围 + sample_fps 上限
         let mut selected = self.select_keyframes(&index.keyframes, opts);
@@ -435,7 +444,10 @@ impl FrameService {
 
         let mut frames = Vec::with_capacity(selected.len());
         for (index, kf) in selected.into_iter().enumerate() {
-            let out_path = work_dir.join(format!("keyframe_{:06}_{:.6}.{ext}", kf.sample_index, kf.pts_sec));
+            let out_path = work_dir.join(format!(
+                "keyframe_{:06}_{:.6}.{ext}",
+                kf.sample_index, kf.pts_sec
+            ));
             self.extract_single_keyframe(kf.pts_sec, &out_path, ext)?;
 
             // 用 showinfo 二次校验实际写入文件的 PTS（防 FFmpeg seek 偏差）
@@ -609,7 +621,11 @@ impl FrameService {
     }
 
     /// 简化版 FFmpeg 运行（不解析 showinfo），用于单帧 seek。
-    fn run_ffmpeg_simple(&self, args: &[OsString], timeout: Duration) -> Result<(), FrameServiceError> {
+    fn run_ffmpeg_simple(
+        &self,
+        args: &[OsString],
+        timeout: Duration,
+    ) -> Result<(), FrameServiceError> {
         let mut command = Command::new(&self.ffmpeg_path);
         command.args(args).stdin(Stdio::null());
         #[cfg(windows)]
@@ -648,7 +664,13 @@ impl FrameService {
                     if status.success() {
                         break Ok(());
                     } else {
-                        let tail = stderr_lines.iter().rev().take(5).cloned().collect::<Vec<_>>().join("; ");
+                        let tail = stderr_lines
+                            .iter()
+                            .rev()
+                            .take(5)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("; ");
                         break Err(FrameServiceError::FFmpegFailed(format!(
                             "退出码 {}：{}",
                             status.code().unwrap_or(-1),
@@ -723,7 +745,13 @@ impl FrameService {
                     if status.success() {
                         break Ok((pts_list, stderr_lines));
                     } else {
-                        let tail = stderr_lines.iter().rev().take(5).cloned().collect::<Vec<_>>().join("; ");
+                        let tail = stderr_lines
+                            .iter()
+                            .rev()
+                            .take(5)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("; ");
                         break Err(FrameServiceError::FFmpegFailed(format!(
                             "退出码 {}：{}",
                             status.code().unwrap_or(-1),
@@ -819,12 +847,7 @@ mod tests {
         fs::write(&video, b"fake").unwrap();
         let out = tmp.path().join("out");
         fs::create_dir_all(&out).unwrap();
-        let service = FrameService::new(
-            PathBuf::from("ffmpeg"),
-            video,
-            out,
-        )
-        .unwrap();
+        let service = FrameService::new(PathBuf::from("ffmpeg"), video, out).unwrap();
         (service, tmp)
     }
 
@@ -924,22 +947,48 @@ mod tests {
     fn selects_keyframes_respects_time_range_and_fps() {
         let (service, _tmp) = make_service();
         let keyframes = vec![
-            mp4::Keyframe { sample_index: 0, pts_sec: 0.0, offset: 0, size: 0 },
-            mp4::Keyframe { sample_index: 30, pts_sec: 1.0, offset: 0, size: 0 },
-            mp4::Keyframe { sample_index: 60, pts_sec: 2.0, offset: 0, size: 0 },
-            mp4::Keyframe { sample_index: 90, pts_sec: 3.0, offset: 0, size: 0 },
+            mp4::Keyframe {
+                sample_index: 0,
+                pts_sec: 0.0,
+                offset: 0,
+                size: 0,
+            },
+            mp4::Keyframe {
+                sample_index: 30,
+                pts_sec: 1.0,
+                offset: 0,
+                size: 0,
+            },
+            mp4::Keyframe {
+                sample_index: 60,
+                pts_sec: 2.0,
+                offset: 0,
+                size: 0,
+            },
+            mp4::Keyframe {
+                sample_index: 90,
+                pts_sec: 3.0,
+                offset: 0,
+                size: 0,
+            },
         ];
         // 无 sample_fps：取范围内全部
-        let selected = service.select_keyframes(&keyframes, &ExtractOptions {
-            time_range: Some((1.0, 3.0)),
-            ..Default::default()
-        });
+        let selected = service.select_keyframes(
+            &keyframes,
+            &ExtractOptions {
+                time_range: Some((1.0, 3.0)),
+                ..Default::default()
+            },
+        );
         assert_eq!(selected.len(), 2);
         // 有 sample_fps：限制间隔（fps=0.5 → min_interval=2.0s）
-        let selected = service.select_keyframes(&keyframes, &ExtractOptions {
-            sample_fps: Some(0.5),
-            ..Default::default()
-        });
+        let selected = service.select_keyframes(
+            &keyframes,
+            &ExtractOptions {
+                sample_fps: Some(0.5),
+                ..Default::default()
+            },
+        );
         assert_eq!(selected.len(), 2); // 0.0 和 2.0
     }
 }

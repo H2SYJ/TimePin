@@ -19,6 +19,13 @@ export function validateSettingsDraft(settings: Settings): SettingsErrors {
       errors[`plugin-${index}`] = '请输入绝对目录路径，例如 D:\\TimePinPlugins 或 /home/user/plugins';
     }
   });
+  // pythonPath 若填写必须是绝对路径，且形如可执行文件
+  if (settings.pythonPath && settings.pythonPath.trim()) {
+    const p = settings.pythonPath.trim();
+    if (!/^(?:\/|[a-zA-Z]:[\\/]|\\\\[^\\]+[\\/][^\\]+)/.test(p)) {
+      errors.pythonPath = '请输入 Python 解释器的绝对路径';
+    }
+  }
   return errors;
 }
 

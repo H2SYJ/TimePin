@@ -46,7 +46,7 @@
     "active": true,
     "createUpdaterArtifacts": false,
     "targets": "all",
-    "resources": ["../plugins"],
+    "resources": ["../plugins", "../runtime"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

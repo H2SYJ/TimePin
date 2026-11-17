@@ -132,6 +132,7 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
 | `plugin://progress` | `PluginProgressEvent{schemaVersion,pluginName,taskId,progress,message?}` |
 | `plugin://log` | `{schemaVersion,pluginName,taskId,level,message}` |
 | `plugin://result` | `PluginRunFinished{schemaVersion,taskId,pluginName,videoId,outcome,error?,marksCount}` outcome ∈ ok/error/cancelled/crashed |
+| `plugin://env-progress` | `PluginEnvProgress{schemaVersion,pluginName,stage,message,error}` stage ∈ creating-venv/installing/ready/failed |
 
 ## 插件清单（`plugin.json`）
 
@@ -144,6 +145,11 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
   "author": "…",
   "entry": "main.py",            // 相对路径，禁止绝对路径与 ".."
   "runtime": "python",           // python | node | rust | binary
+  "python": ">=3.10,<3.13",      // 可选，仅 runtime=python 生效：版本约束
+  "dependencies": [              // 可选，仅 runtime=python 生效：pip 依赖
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0"
+  ],
   "capabilities": ["metadata","fileWrite"],
   "parametersSchema": { /* JSON Schema properties，前端渲染参数表单 */ },
   "outputSchema": { }
@@ -152,10 +158,44 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
 
 校验规则见 `src-tauri/src/plugins/manifest.rs::validate()`。
 
+### Python 运行时与依赖
+
+TimePin 分发内嵌 Python（`runtime/python/`），用户无需安装系统 Python。
+解释器解析优先级（`plugins/python_env.rs::resolve_python`）：
+
+1. 设置中的 `pythonPath`（显式覆盖，供调试用）
+2. `<install>/runtime/python/`（Tauri `bundle.resources` 分发）
+3. `<exe>/dependencies/python/`（开发期手动放置，与 FFmpeg 依赖目录约定一致）
+4. 系统 `python` / `python3`（仅当设置开启 `useSystemPython`）
+
+声明 `python` 版本约束时按 PEP 440 简化语法校验：
+`>=3.10`、`>=3.10,<3.13`、`==3.11.*`、`~=3.11`、裸版本 `3.11`（前缀匹配 `3.11.x`）。
+
+### 依赖与虚拟环境
+
+`runtime=python` 且 `dependencies` 非空的插件在首次 spawn 前自动建置隔离 venv：
+
+- 位置：`<appData>/pluginEnvironments/<name>-<dirHash8>/venv`
+- 指纹：dependencies + 解释器版本 哈希 → 变化时自动重建
+- 失败：透传 pip stdout/stderr 到 `PluginInfo.pythonEnvironment.error`
+- 进度事件：`plugin://env-progress` → `PluginEnvProgress{stage: creating-venv|installing|ready|failed, message, error}`
+
+同一台机器可同时安装 onnxruntime 1.16 与 1.20（两个插件各自独立 venv）。
+
+删除插件目录后 `reload` 自动清理 `<pluginEnvironments>/` 下的孤儿目录；
+手动重建全部环境可在设置页点「重建所有插件环境」。
+
+### 共享 SDK
+
+`plugins/_shared/timepin_vision/` 提供可复用的视觉识别 SDK（模板匹配、OCR、
+序列差分、ONNX 模型加载等）。插件在 `dependencies` 中写本地相对路径
+（如 `"../_shared/timepin_vision"`）即可让它装到自己的 venv 里；
+打包时 `_shared/` 随 `plugins/` 一起经 `bundle.resources` 分发。
+
 ## 新增一个插件
 
 1. 在 `plugins/` 或设置中的 `customPluginDirs` 下新建目录
-2. 放入 `plugin.json` + 入口文件
+2. 放入 `plugin.json` + 入口文件（按需声明 `dependencies`）
 3. 前端点「重新加载」或重启应用 —— 不需要改主程序任何代码
 
 ## 结果合并与去重

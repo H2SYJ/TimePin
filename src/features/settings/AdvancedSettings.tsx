@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Card, Input } from '@/components/ui';
 import { api, isTauri } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
-import type { AdvancedSettingsInfo, DependencyReport, Settings } from '@/types';
+import type { AdvancedSettingsInfo, DependencyReport, EnvRebuildResult, Settings } from '@/types';
 import type { SettingsErrors } from './settingsValidation';
 import type { useDependencyInstaller } from './useDependencyInstaller';
 
@@ -99,6 +99,30 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
     if (mounted.current) setPicking(false);
   };
 
+  const browsePython = async () => {
+    setPicking(true);
+    await perform(async () => {
+      const path = await api.pickPythonExecutable();
+      if (path && mounted.current) patch('pythonPath', path);
+    });
+    if (mounted.current) setPicking(false);
+  };
+
+  const [rebuildBusy, setRebuildBusy] = useState(false);
+  const [rebuildResults, setRebuildResults] = useState<EnvRebuildResult[] | null>(null);
+  const rebuildEnvironments = async () => {
+    setRebuildBusy(true);
+    setOperationError(null);
+    try {
+      const results = await api.rebuildPluginEnvironments();
+      if (mounted.current) setRebuildResults(results);
+    } catch (cause) {
+      if (mounted.current) setOperationError(String(cause));
+    } finally {
+      if (mounted.current) setRebuildBusy(false);
+    }
+  };
+
   const browseTool = async (tool: Tool) => {
     setPicking(true);
     await perform(async () => {
@@ -156,6 +180,40 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
             <Button variant="ghost" isDisabled={busy || draft.customPluginDirs.length === 0} onPress={() => patch('customPluginDirs', [])}><RotateCcw className="h-4 w-4" aria-hidden="true" />恢复默认插件目录</Button>
           </div>
           <p className="rounded-lg bg-default-100 p-3 text-sm text-default-600">更改目录不会移动或删除旧插件。需要迁移时，请手动复制插件到目标目录，再保存设置；恢复默认仅清空额外目录列表。</p>
+        </section>
+
+        <section aria-labelledby="python-runtime-title" className="space-y-4 border-t border-divider pt-5">
+          <div>
+            <h3 id="python-runtime-title" className="text-sm font-semibold">Python 运行时</h3>
+            <p className="mt-1 text-xs text-default-500">TimePin 自带 Python 运行时，无需系统安装。插件声明的依赖会安装在各自的隔离虚拟环境中（<code className="rounded bg-default-100 px-1">pluginEnvironments/</code>）。</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+            <Input label="自定义 Python 解释器" value={draft.pythonPath ?? ''} placeholder="留空使用内嵌运行时；填绝对路径覆盖" description="显式指定后优先于内嵌运行时。仅在特殊调试场景使用。" isDisabled={busy} isInvalid={Boolean(errors.pythonPath)} errorMessage={errors.pythonPath} onValueChange={(value) => patch('pythonPath', value || null)} />
+            <Button variant="secondary" isDisabled={!desktop || busy} aria-label="浏览 Python 解释器" onPress={() => void browsePython()}>浏览文件</Button>
+          </div>
+          <label className="flex items-center gap-3 rounded-lg border border-divider p-3 text-sm">
+            <input type="checkbox" checked={draft.useSystemPython} onChange={(event) => patch('useSystemPython', event.target.checked)} disabled={busy} className="h-4 w-4 accent-primary" aria-label="允许使用系统 Python" />
+            <span>允许使用系统 Python 作为回退（内嵌运行时不可用时尝试 PATH 中的 python/python3）</span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" isLoading={rebuildBusy} isDisabled={!desktop || busy || rebuildBusy} onPress={() => void rebuildEnvironments()}><RefreshCw className="h-4 w-4" aria-hidden="true" />{rebuildBusy ? '重建中…' : '重建所有插件环境'}</Button>
+            <p className="text-xs text-default-500">删除并重建每个 Python 插件的虚拟环境；解决依赖冲突或环境损坏时使用。</p>
+          </div>
+          {rebuildResults && (
+            <ul aria-label="重建结果" className="space-y-2 rounded-lg border border-divider p-3 text-xs">
+              {rebuildResults.length === 0 && <li className="text-default-500">没有需要重建的 Python 插件（或尚未安装任何插件）。</li>}
+              {rebuildResults.map((result) => (
+                <li key={result.name}>
+                  <span className="font-medium">{result.name}</span>
+                  {result.error ? (
+                    <pre className="mt-1 whitespace-pre-wrap break-words text-danger">{result.error}</pre>
+                  ) : (
+                    <span className="ml-2 break-all text-default-500">→ {result.venvDir}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section aria-labelledby="media-dependencies-title" className="space-y-4 border-t border-divider pt-5">

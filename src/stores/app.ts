@@ -18,6 +18,8 @@ const defaultSettings: Settings = {
   theme: 'system',
   hardwareAcceleration: true,
   customPluginDirs: [],
+  pythonPath: null,
+  useSystemPython: false,
   recentFiles: [],
   windowState: null,
 };

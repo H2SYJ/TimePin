@@ -13,6 +13,8 @@ import type {
   OrchestrationProgress,
   OrchestrationRequest,
   OrchestrationResult,
+  EnvRebuildResult,
+  PluginEnvProgress,
   PluginInfo,
   PluginResult,
   Settings,
@@ -60,6 +62,8 @@ function browserSettings(): Settings {
     theme: 'system',
     hardwareAcceleration: true,
     customPluginDirs: [],
+    pythonPath: null,
+    useSystemPython: false,
     recentFiles: [],
     windowState: null,
   };
@@ -101,6 +105,17 @@ export const api = {
   async pickExecutable(tool: 'ffmpeg' | 'ffprobe'): Promise<string | null> {
     if (!isTauri()) throw new Error('工具选择需要在 TimePin 桌面应用中运行');
     const selected = await open({ multiple: false, title: `选择 ${tool} 可执行文件` });
+    return Array.isArray(selected) ? selected[0] ?? null : selected;
+  },
+
+  /** 选择 Python 解释器（python.exe / python3）。返回绝对路径或 null。 */
+  async pickPythonExecutable(): Promise<string | null> {
+    if (!isTauri()) throw new Error('选择 Python 解释器需要在 TimePin 桌面应用中运行');
+    const selected = await open({
+      multiple: false,
+      title: '选择 Python 解释器',
+      filters: [{ name: 'Python', extensions: ['exe', 'bat', 'sh'] }],
+    });
     return Array.isArray(selected) ? selected[0] ?? null : selected;
   },
 
@@ -197,6 +212,20 @@ export const api = {
   async reloadPlugins(): Promise<PluginInfo[]> {
     if (!isTauri()) return [];
     return tauriInvoke<PluginInfo[]>('reload_plugins');
+  },
+
+  /** 重建所有 Python 插件的虚拟环境。返回每个插件的建置结果。 */
+  async rebuildPluginEnvironments(): Promise<EnvRebuildResult[]> {
+    if (!isTauri()) throw new Error('重建插件环境需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<EnvRebuildResult[]>('rebuild_plugin_environments');
+  },
+
+  /** 监听 Python 环境建置进度（venv create / pip install / ready / failed） */
+  async onPluginEnvProgress(
+    handler: (event: PluginEnvProgress) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://env-progress', (e: any) => handler(e.payload));
   },
 
   async runPlugin(

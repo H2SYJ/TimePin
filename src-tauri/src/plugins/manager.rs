@@ -23,11 +23,12 @@ use crate::formats::Mark;
 use crate::frame_service::{FrameExtractRequest, FrameService};
 use crate::ipc::SCHEMA_VERSION;
 
-use super::manifest::{PluginCapability, PluginManifest};
+use super::manifest::{PluginCapability, PluginManifest, PluginRuntime};
 use super::protocol::{
     LogParams, PluginNotification, PluginResult, ProgressParams, RunParams, RunVideoInfo,
     PROTOCOL_VERSION,
 };
+use super::python_env::{self, PythonEnvError};
 use super::runtime::{
     HostRequestHandler, NotificationHandler, PluginProcess, PluginProcessError,
     HOST_SERVICE_FRAMES_EXTRACT,
@@ -49,6 +50,8 @@ pub enum PluginError {
     MissingCapability(PluginCapability),
     #[error(transparent)]
     Process(#[from] PluginProcessError),
+    #[error(transparent)]
+    Env(#[from] PythonEnvError),
     #[error("任务失败：{0}")]
     Task(String),
 }
@@ -69,6 +72,9 @@ pub struct PluginInfo {
     pub status: String,
     #[serde(default)]
     pub status_detail: Option<String>,
+    /// Python 环境状态（runtime=python 时填充）
+    #[serde(default)]
+    pub python_environment: Option<python_env::PluginEnvStatus>,
 }
 
 /// 一次执行完成后发给前端的 payload
@@ -203,13 +209,16 @@ impl PluginManager {
         )
     }
 
-    /// 列出全部插件（含 invalid/crashed 状态）
-    pub fn list(&self) -> Vec<PluginInfo> {
+    /// 列出全部插件（含 invalid/crashed 状态）。
+    /// `settings` 传入用于查询 Python 环境状态；传 `None` 时该字段为 None。
+    pub fn list(&self, settings: Option<&crate::core::settings::Settings>) -> Vec<PluginInfo> {
         let plugins = self.plugins.lock().expect("plugins mutex poisoned");
         let mut infos: Vec<PluginInfo> = plugins
             .values()
             .map(|p| {
                 let p = p.lock().expect("plugin mutex poisoned");
+                let python_environment = settings
+                    .map(|s| python_env::plugin_env_status(&p.manifest, &p.dir, &self.app, s));
                 PluginInfo {
                     name: p.manifest.name.clone(),
                     version: p.manifest.version.clone(),
@@ -227,6 +236,7 @@ impl PluginManager {
                     dir: p.dir.clone(),
                     status: p.status.clone(),
                     status_detail: p.status_detail.clone(),
+                    python_environment,
                 }
             })
             .collect();
@@ -276,12 +286,31 @@ impl PluginManager {
                 guard.shutdown(Duration::from_secs(2));
             }
         }
+        // Python runtime：先准备解释器（共享或插件 venv），再 spawn。
+        // 环境建置失败必须阻断启动并把 pip 输出透传出去——铁律验收。
+        let python_interpreter = if p.manifest.runtime == PluginRuntime::Python {
+            let settings = crate::core::settings::load_settings(&self.app)
+                .map_err(|e| PythonEnvError::InterpreterNotFound(format!("读取设置失败：{e}")))?;
+            Some(python_env::ensure_python_environment(
+                &p.manifest,
+                &p.dir,
+                &self.app,
+                &settings,
+            )?)
+        } else {
+            None
+        };
         let app = self.app.clone();
         let plugin_name = p.manifest.name.clone();
         let on_notify: NotificationHandler = Arc::new(move |notification| {
             handle_notification(&app, &plugin_name, notification);
         });
-        let process = PluginProcess::spawn(p.manifest.clone(), &p.dir, Some(on_notify))?;
+        let process = PluginProcess::spawn(
+            p.manifest.clone(),
+            &p.dir,
+            python_interpreter.as_deref(),
+            Some(on_notify),
+        )?;
         p.process = Some(Arc::new(Mutex::new(process)));
         p.state = ProcessState::Ready;
         p.status = "ready".to_string();
@@ -325,6 +354,7 @@ impl PluginManager {
     ///
     /// 新增插件目录 = 新增一个目录，不需要改主程序；
     /// `reload` 允许前端按钮触发重新发现。
+    /// 同时清理「已不存在于任何插件目录」的孤儿 venv。
     pub fn reload(&self, plugin_dirs: &[PathBuf]) {
         self.stop_all();
         let fresh = Self::discover(&self.app, plugin_dirs);
@@ -333,6 +363,76 @@ impl PluginManager {
             .unwrap_or_default();
         let mut plugins = self.plugins.lock().expect("plugins mutex poisoned");
         *plugins = fresh_map;
+        drop(plugins);
+        self.cleanup_orphan_environments();
+    }
+
+    /// 清理 `<appData>/pluginEnvironments/` 下没有对应插件的目录。
+    /// 删除插件目录后 reload 时自动触发。
+    fn cleanup_orphan_environments(&self) {
+        let envs_root = crate::core::get_app_data_dir(&self.app).join("pluginEnvironments");
+        let Ok(entries) = std::fs::read_dir(&envs_root) else {
+            return;
+        };
+        // 当前所有插件期望的环境目录名集合
+        let expected: std::collections::HashSet<String> = {
+            let plugins = self.plugins.lock().expect("plugins mutex poisoned");
+            plugins
+                .values()
+                .filter_map(|p| {
+                    let p = p.lock().ok()?;
+                    if p.manifest.runtime == PluginRuntime::Python
+                        && !p.manifest.dependencies.is_empty()
+                    {
+                        Some(python_env::env_dir_name(&p.manifest, &p.dir))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !expected.contains(&name) {
+                log::info!("清理孤儿插件环境：{}", path.display());
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+
+    /// 删除某插件对应的 Python 环境（卸载插件时调用）。
+    /// 插件目录可能已不存在——按 manifest+dir 定位 env 目录即可。
+    pub fn remove_environment(&self, name: &str) -> Result<(), PluginError> {
+        let plugin = self.get(name)?;
+        let p = plugin.lock().expect("plugin mutex poisoned");
+        python_env::remove_plugin_environment(&self.app, &p.manifest, &p.dir)?;
+        Ok(())
+    }
+
+    /// 重建所有 Python 插件环境（设置页「重建所有插件环境」按钮）。
+    /// 进程中的插件会先停止；逐个插件重建，单插件失败不影响其他。
+    pub fn rebuild_environments(
+        &self,
+        settings: &crate::core::settings::Settings,
+    ) -> Vec<(String, Result<PathBuf, String>)> {
+        self.stop_all();
+        let plugins = self.plugins.lock().expect("plugins mutex poisoned");
+        let mut results = Vec::new();
+        for plugin in plugins.values() {
+            let p = plugin.lock().expect("plugin mutex poisoned");
+            if p.manifest.runtime != PluginRuntime::Python || p.manifest.dependencies.is_empty() {
+                continue;
+            }
+            let result =
+                python_env::ensure_python_environment(&p.manifest, &p.dir, &self.app, settings)
+                    .map_err(|e| e.to_string());
+            results.push((p.manifest.name.clone(), result));
+        }
+        results
     }
 
     /// 执行插件任务（同步阻塞版本；调用方用 `spawn_blocking`）。
@@ -450,60 +550,40 @@ impl PluginManager {
         output_dir: PathBuf,
     ) -> HostRequestHandler {
         let app = self.app.clone();
-        Arc::new(move |request: &super::protocol::RpcRequest| {
-            match request.method.as_str() {
+        Arc::new(
+            move |request: &super::protocol::RpcRequest| match request.method.as_str() {
                 HOST_SERVICE_FRAMES_EXTRACT => {
-                    let params = match serde_json::from_value::<serde_json::Value>(
-                        request.params.clone(),
-                    ) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Err((
-                                -32602,
-                                format!("frames.extract 参数解析失败：{e}"),
-                            ))
-                        }
-                    };
-                    let frame_request: FrameExtractRequest =
-                        match serde_json::from_value(params) {
-                            Ok(r) => r,
+                    let params =
+                        match serde_json::from_value::<serde_json::Value>(request.params.clone()) {
+                            Ok(v) => v,
                             Err(e) => {
-                                return Err((
-                                    -32602,
-                                    format!("frames.extract 请求结构错误：{e}"),
-                                ))
+                                return Err((-32602, format!("frames.extract 参数解析失败：{e}")))
                             }
                         };
-                    let ffmpeg = match crate::core::tools::resolve_ffmpeg(&app) {
-                        Some(p) => p,
-                        None => {
-                            return Err((
-                                -32000,
-                                "ffmpeg 未配置或不可用".to_string(),
-                            ))
+                    let frame_request: FrameExtractRequest = match serde_json::from_value(params) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err((-32602, format!("frames.extract 请求结构错误：{e}")))
                         }
                     };
-                    let service = match FrameService::new(
-                        ffmpeg,
-                        video_path.clone(),
-                        output_dir.clone(),
-                    ) {
-                        Ok(s) => s,
-                        Err(e) => return Err((-32000, e.to_string())),
+                    let ffmpeg = match crate::core::tools::resolve_ffmpeg(&app) {
+                        Some(p) => p,
+                        None => return Err((-32000, "ffmpeg 未配置或不可用".to_string())),
                     };
+                    let service =
+                        match FrameService::new(ffmpeg, video_path.clone(), output_dir.clone()) {
+                            Ok(s) => s,
+                            Err(e) => return Err((-32000, e.to_string())),
+                        };
                     match service.extract(frame_request) {
-                        Ok(result) => serde_json::to_value(&result).map_err(|e| {
-                            (-32603, format!("frames.extract 结果序列化失败：{e}"))
-                        }),
+                        Ok(result) => serde_json::to_value(&result)
+                            .map_err(|e| (-32603, format!("frames.extract 结果序列化失败：{e}"))),
                         Err(e) => Err((-32000, e.to_string())),
                     }
                 }
-                _ => Err((
-                    -32601,
-                    format!("不支持的宿主服务方法：{}", request.method),
-                )),
-            }
-        })
+                _ => Err((-32601, format!("不支持的宿主服务方法：{}", request.method))),
+            },
+        )
     }
 
     fn emit_status(&self, plugin_name: &str, status: &str, detail: Option<String>) {

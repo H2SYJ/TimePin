@@ -29,6 +29,11 @@ pub struct Settings {
     pub hardware_acceleration: bool,
     /// 自定义插件目录
     pub custom_plugin_dirs: Vec<PathBuf>,
+    /// 显式 Python 解释器路径（可选；绝对路径，最高优先级）
+    pub python_path: Option<PathBuf>,
+    /// 是否允许回退到系统 PATH 上的 python/python3（默认 false——
+    /// 内嵌运行时缺失时直接报错，让用户明确选择）
+    pub use_system_python: bool,
     /// 最近打开的文件列表
     pub recent_files: Vec<PathBuf>,
     /// 窗口状态
@@ -81,6 +86,8 @@ impl Default for Settings {
             theme: Theme::default(),
             hardware_acceleration: true,
             custom_plugin_dirs: Vec::new(),
+            python_path: None,
+            use_system_python: false,
             recent_files: Vec::new(),
             window_state: None,
         }
@@ -110,6 +117,7 @@ impl Settings {
         }
         validate_tool_path("ffmpegPath", self.ffmpeg_path.as_ref())?;
         validate_tool_path("ffprobePath", self.ffprobe_path.as_ref())?;
+        validate_tool_path("pythonPath", self.python_path.as_ref())?;
         for dir in &self.custom_plugin_dirs {
             if !dir.is_absolute() {
                 return Err(format!("自定义插件目录必须是绝对路径：{}", dir.display()));

@@ -26,6 +26,14 @@ pub struct PluginManifest {
     /// 结果 JSON Schema（文档用途为主，运行时宽松校验）
     #[serde(default)]
     pub output_schema: HashMap<String, serde_json::Value>,
+    /// Python 解释器约束（如 `">=3.10,<3.13"`）。仅 runtime=python 生效；
+    /// 未声明时任何已解析解释器均可。
+    #[serde(default)]
+    pub python: Option<String>,
+    /// pip 依赖列表（如 `["numpy>=1.24", "onnxruntime==1.16.0"]`）。
+    /// 仅 runtime=python 生效；声明后插件在专属 venv 中运行，实现依赖隔离。
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,6 +89,25 @@ impl PluginManifest {
                 errors.push("entry 必须是插件目录内的相对路径，不允许绝对路径或 `..`".to_string());
             }
         }
+        // Python 依赖声明的约束：依赖语法不做完整 PEP 508 校验，
+        // 只防明显破坏（空字符串、路径注入）。
+        if self.runtime != PluginRuntime::Python {
+            if self.python.is_some() {
+                errors.push("python 字段仅对 runtime=python 生效".to_string());
+            }
+            if !self.dependencies.is_empty() {
+                errors.push("dependencies 字段仅对 runtime=python 生效".to_string());
+            }
+        } else {
+            for dep in &self.dependencies {
+                let d = dep.trim();
+                if d.is_empty() {
+                    errors.push("dependencies 不允许空字符串".to_string());
+                } else if d.contains("..") || d.starts_with('/') || d.starts_with('\\') {
+                    errors.push(format!("dependencies 不允许路径形式：{d}"));
+                }
+            }
+        }
         errors
     }
 
@@ -116,6 +143,8 @@ impl Default for PluginManifest {
             capabilities: Vec::new(),
             parameters_schema: HashMap::new(),
             output_schema: HashMap::new(),
+            python: None,
+            dependencies: Vec::new(),
         }
     }
 }
@@ -157,6 +186,38 @@ mod tests {
     fn rejects_bad_name() {
         let mut m = valid();
         m.name = "bad name!".to_string();
+        assert!(!m.validate().is_empty());
+    }
+
+    #[test]
+    fn python_deps_allowed_for_python_runtime() {
+        let mut m = valid();
+        m.runtime = PluginRuntime::Python;
+        m.python = Some(">=3.10".to_string());
+        m.dependencies = vec!["numpy>=1.24".to_string()];
+        assert!(m.validate().is_empty());
+    }
+
+    #[test]
+    fn python_fields_rejected_for_non_python_runtime() {
+        let mut m = valid();
+        m.runtime = PluginRuntime::Binary;
+        m.entry = "plugin.exe".to_string();
+        m.dependencies = vec!["numpy".to_string()];
+        assert!(m
+            .validate()
+            .iter()
+            .any(|e| e.contains("仅对 runtime=python 生效")));
+    }
+
+    #[test]
+    fn rejects_dangerous_dependency_strings() {
+        let mut m = valid();
+        m.dependencies = vec!["../../etc/passwd".to_string()];
+        assert!(!m.validate().is_empty());
+        m.dependencies = vec!["/abs/path".to_string()];
+        assert!(!m.validate().is_empty());
+        m.dependencies = vec!["".to_string()];
         assert!(!m.validate().is_empty());
     }
 }
