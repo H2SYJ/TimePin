@@ -27,6 +27,50 @@ export interface ButtonProps extends Omit<HeroButtonProps, 'variant' | 'size' | 
   size?: ButtonSize;
 }
 
+// Section - 用于页面分组，Card 容器 + 标题/描述 + 可选 trailing
+export interface SectionProps {
+  title: string;
+  description: string;
+  trailing?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}
+
+export function Section({ title, description, trailing, children, className }: SectionProps) {
+  return (
+    <Card className={cn('p-6', className)}>
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="mt-1 text-sm text-default-500">{description}</p>
+        </div>
+        {trailing}
+      </div>
+      <div className="space-y-5">{children}</div>
+    </Card>
+  );
+}
+
+// Field - 表单字段行，标签-控件栅格布局
+export interface FieldProps {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  className?: string;
+}
+
+export function Field({ label, hint, children, className }: FieldProps) {
+  return (
+    <div className={cn('grid grid-cols-1 items-start gap-2 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-center sm:gap-4', className)}>
+      <div>
+        <Label>{label}</Label>
+        {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
 const buttonVariantMap: Record<ButtonVariant, Pick<HeroButtonProps, 'color' | 'variant' | 'className'>> = {
   primary: { color: 'primary', variant: 'solid' },
   secondary: { color: 'default', variant: 'flat' },
