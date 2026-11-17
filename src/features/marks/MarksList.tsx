@@ -1,21 +1,28 @@
 import { useState } from 'react';
 import { ChevronRight, Pencil, Trash2 } from 'lucide-react';
-import { Button, Input } from '@/components/ui';
+import { Button, Checkbox, Input } from '@/components/ui';
 import type { Mark } from '@/types';
+import { isExportableInterval } from './exportMarks';
 import { formatTime } from './format';
 
 interface MarksListProps {
   marks: Mark[];
   readOnly: boolean;
   canSeek: boolean;
+  duration: number;
+  /** Which exportable marks are currently selected for segment export. */
+  selectedIds?: Set<string>;
+  onToggleExport?: (markId: string, selected: boolean) => void;
+  exportBusy?: boolean;
   onSeek: (time: number) => void;
   onRename: (mark: Mark, label: string) => void;
   onDelete: (mark: Mark) => void;
 }
 
-function MarkRow({ mark, readOnly, canSeek, onSeek, onRename, onDelete }: Omit<MarksListProps, 'marks'> & { mark: Mark }) {
+function MarkRow({ mark, readOnly, canSeek, duration, selectedIds, onToggleExport, exportBusy, onSeek, onRename, onDelete }: Omit<MarksListProps, 'marks'> & { mark: Mark }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(mark.label);
+  const exportable = isExportableInterval(mark, duration);
   const commit = () => {
     if (!draft.trim() || readOnly) return;
     onRename(mark, draft);
@@ -25,6 +32,15 @@ function MarkRow({ mark, readOnly, canSeek, onSeek, onRename, onDelete }: Omit<M
   return (
     <li className="rounded-xl border border-divider bg-background/60 p-3">
       <div className="flex items-center gap-2">
+        {onToggleExport ? (
+          <Checkbox
+            checked={selectedIds?.has(mark.id) ?? false}
+            onCheckedChange={(checked) => onToggleExport(mark.id, checked)}
+            isDisabled={readOnly || !exportable || exportBusy}
+            aria-label={`导出 ${mark.label}`}
+            className="shrink-0"
+          />
+        ) : null}
         <Button
           variant="ghost" className="min-w-0 flex-1 justify-start px-2 text-left"
           aria-label={`跳转到 ${mark.label}`} isDisabled={!canSeek}
@@ -45,6 +61,11 @@ function MarkRow({ mark, readOnly, canSeek, onSeek, onRename, onDelete }: Omit<M
       <p className="mt-1 font-mono text-xs tabular-nums text-default-500">
         {mark.endTime === null ? '点' : '区间'} · {formatTime(mark.startTime)}
         {mark.endTime !== null ? ` – ${formatTime(mark.endTime)}` : ''}
+        {onToggleExport && !exportable ? (
+          <span className="ml-2 text-default-400">
+            {mark.endTime === null ? '· 不可导出（时间点）' : '· 不可导出（无效或超出时长）'}
+          </span>
+        ) : null}
       </p>
       <p className="mt-1 text-xs text-default-500">
         来源：{mark.sourcePlugin ?? '手动'}

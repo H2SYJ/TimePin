@@ -5,10 +5,12 @@ import { fileSrc } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
 import { useMarksStore } from '@/stores/marks';
 import type { VideoInfo } from '@/types';
+import { ExportPanel } from './ExportPanel';
 import { formatTime, manualMark, normalizeInterval } from './format';
 import { MarksList } from './MarksList';
 import { MarksTimeline } from './MarksTimeline';
 import { useMarksShortcuts } from './useMarksShortcuts';
+import { useSegmentExport } from './useSegmentExport';
 
 function MarksWorkspace({ video }: { video: VideoInfo }) {
   const player = useRef<HTMLVideoElement>(null);
@@ -25,6 +27,9 @@ function MarksWorkspace({ video }: { video: VideoInfo }) {
   const canSeek = metadataReady && duration > 0 && !playbackError;
   const canEdit = canSeek && entry?.loadStatus === 'ready';
   const marks = useMemo(() => [...(entry?.marks ?? [])].sort((a, b) => a.startTime - b.startTime), [entry?.marks]);
+  const {
+    selectedIds, toggleSelected, toggleAll, state: exportState, runExport,
+  } = useSegmentExport(video, marks, duration);
 
   useEffect(() => { void load(video.id); }, [load, video.id]);
 
@@ -165,13 +170,24 @@ function MarksWorkspace({ video }: { video: VideoInfo }) {
           <p className="text-xs leading-relaxed text-default-500">M：以播放器当前时间打点 · R：开始/结束区间（支持反向定位）· Esc：取消区间。输入文字时不触发快捷键。</p>
           <p role="status" aria-live="polite" className="min-h-5 text-sm text-primary">{feedback}</p>
         </section>
-        <section aria-labelledby="marks-list-title" className="min-w-0">
-          <h2 id="marks-list-title" className="mb-4 flex items-center gap-2 text-base font-semibold"><MapPin className="h-4 w-4 text-primary" aria-hidden="true" />标注列表 <span className="text-sm font-normal text-default-500">{marks.length} 项</span></h2>
+        <section aria-labelledby="marks-list-title" className="min-w-0 space-y-4">
+          <div>
+            <h2 id="marks-list-title" className="mb-4 flex items-center gap-2 text-base font-semibold"><MapPin className="h-4 w-4 text-primary" aria-hidden="true" />标注列表 <span className="text-sm font-normal text-default-500">{marks.length} 项</span></h2>
+            {entry?.loadStatus === 'ready' ? (
+              <MarksList marks={marks} readOnly={false} canSeek={canSeek} duration={duration}
+                selectedIds={selectedIds} onToggleExport={toggleSelected} exportBusy={exportState.phase !== 'idle'}
+                onSeek={seek}
+                onRename={(mark, label) => useMarksStore.getState().rename(video.id, mark.id, label)}
+                onDelete={(mark) => useMarksStore.getState().remove(video.id, mark.id)} />
+            ) : <p className="text-sm text-default-500">{entry?.loadStatus === 'error' ? '标注读取失败' : '正在读取标注…'}</p>}
+          </div>
           {entry?.loadStatus === 'ready' ? (
-            <MarksList marks={marks} readOnly={false} canSeek={canSeek} onSeek={seek}
-              onRename={(mark, label) => useMarksStore.getState().rename(video.id, mark.id, label)}
-              onDelete={(mark) => useMarksStore.getState().remove(video.id, mark.id)} />
-          ) : <p className="text-sm text-default-500">{entry?.loadStatus === 'error' ? '标注读取失败' : '正在读取标注…'}</p>}
+            <ExportPanel
+              marks={marks} duration={duration}
+              selectedIds={selectedIds} onToggle={toggleSelected} onToggleAll={toggleAll}
+              state={exportState} onExport={runExport} canInteract={canEdit}
+            />
+          ) : null}
         </section>
       </div>
     </main>
