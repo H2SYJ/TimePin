@@ -108,6 +108,7 @@ discovered → validated → started → ready → running → stopped | crashed
 - `manager.rs` 的 `PluginManager` 持有 `Arc<Mutex<HashMap<String, Arc<Mutex<ManagedPlugin>>>>>`
 - `ManagedPlugin.process: Option<Arc<Mutex<PluginProcess>>>` — **M5 修复**：外层锁只取 Arc，长 RPC 在内层锁外执行，`cancel()`/`stop()` 在运行期间可达
 - `runtime.rs` 的 `PluginProcess` 封装 `std::process::Child` + stdin/stdout JSON-RPC
+- 宿主反向服务：`frame_service` 在 `run` 期间向插件提供 `frames.extract`（capability `hostServices.framesExtract`，独立于插件协议版本）；契约见 `docs/frame-service.md` + `docs/schemas/frames-extract.schema.json`，Python 客户端 `plugins/frame_client.py`
 - 超时：`send_request` 默认 600s；`cancel(task_id)` 发 cancel 通知尽力取消
 - 崩溃恢复：`run_plugin` 发现进程已死 → 自动 `ensure_process` 重启
 - 通知：`progress`/`log` → Tauri event `plugin://progress` `plugin://log` `plugin://result`

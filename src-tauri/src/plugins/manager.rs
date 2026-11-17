@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 
 use crate::formats::Mark;
+use crate::frame_service::{FrameExtractRequest, FrameService};
 use crate::ipc::SCHEMA_VERSION;
 
 use super::manifest::{PluginCapability, PluginManifest};
@@ -27,7 +28,10 @@ use super::protocol::{
     LogParams, PluginNotification, PluginResult, ProgressParams, RunParams, RunVideoInfo,
     PROTOCOL_VERSION,
 };
-use super::runtime::{NotificationHandler, PluginProcess, PluginProcessError};
+use super::runtime::{
+    HostRequestHandler, NotificationHandler, PluginProcess, PluginProcessError,
+    HOST_SERVICE_FRAMES_EXTRACT,
+};
 
 /// 插件生命周期事件名（前端 listen 用）
 pub const EVENT_PLUGIN_STATUS: &str = "plugin://status";
@@ -371,7 +375,7 @@ impl PluginManager {
                 metadata: video.metadata.clone(),
             },
             params,
-            output_dir,
+            output_dir: output_dir.clone(),
         };
 
         let plugin_name = name.to_string();
@@ -383,13 +387,20 @@ impl PluginManager {
             self.emit_status(&plugin_name, "running", None);
             p.process.clone()
         };
+        // 构建 run 生命周期内的宿主反向服务处理器（frames.extract）。
+        // 只在 frame_service 实现存在时注入；当前 FrameService 由子代理并行开发，
+        // 若模块尚未就位则以 `cfg` 软连接，避免阻塞主代码编译。
+        let video_path = video.path.clone();
+        let host_handler = self.build_host_service_handler(video_path, output_dir.clone());
+
         let result = match process_arc {
             Some(process) => {
                 let mut guard = process.lock().expect("process mutex poisoned");
-                guard.run(
+                guard.run_with_host_services(
                     serde_json::to_value(&run_params)
                         .map_err(|e| PluginError::Task(e.to_string()))?,
                     None,
+                    Some(host_handler),
                 )
             }
             None => Err(PluginProcessError::SpawnFailed("进程未启动".to_string())),
@@ -424,6 +435,75 @@ impl PluginManager {
                 }
             }
         }
+    }
+
+    /// 组装 `frames.extract` 反向服务处理器。
+    ///
+    /// - `video_path` / `output_dir` 在本次 `run` 开始时快照，确保
+    ///   服务上下文与 `RunParams` 一致（插件后续修改自身 `outputDir`
+    ///   不会影响授权边界）。
+    /// - `FrameService` 每次请求临时创建，避免长生命周期状态泄漏；
+    ///   ffmpeg 路径从 settings 解析，与依赖报告使用同一逻辑。
+    fn build_host_service_handler(
+        &self,
+        video_path: std::path::PathBuf,
+        output_dir: PathBuf,
+    ) -> HostRequestHandler {
+        let app = self.app.clone();
+        Arc::new(move |request: &super::protocol::RpcRequest| {
+            match request.method.as_str() {
+                HOST_SERVICE_FRAMES_EXTRACT => {
+                    let params = match serde_json::from_value::<serde_json::Value>(
+                        request.params.clone(),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err((
+                                -32602,
+                                format!("frames.extract 参数解析失败：{e}"),
+                            ))
+                        }
+                    };
+                    let frame_request: FrameExtractRequest =
+                        match serde_json::from_value(params) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                return Err((
+                                    -32602,
+                                    format!("frames.extract 请求结构错误：{e}"),
+                                ))
+                            }
+                        };
+                    let ffmpeg = match crate::core::tools::resolve_ffmpeg(&app) {
+                        Some(p) => p,
+                        None => {
+                            return Err((
+                                -32000,
+                                "ffmpeg 未配置或不可用".to_string(),
+                            ))
+                        }
+                    };
+                    let service = match FrameService::new(
+                        ffmpeg,
+                        video_path.clone(),
+                        output_dir.clone(),
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => return Err((-32000, e.to_string())),
+                    };
+                    match service.extract(frame_request) {
+                        Ok(result) => serde_json::to_value(&result).map_err(|e| {
+                            (-32603, format!("frames.extract 结果序列化失败：{e}"))
+                        }),
+                        Err(e) => Err((-32000, e.to_string())),
+                    }
+                }
+                _ => Err((
+                    -32601,
+                    format!("不支持的宿主服务方法：{}", request.method),
+                )),
+            }
+        })
     }
 
     fn emit_status(&self, plugin_name: &str, status: &str, detail: Option<String>) {

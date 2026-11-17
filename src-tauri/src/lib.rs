@@ -76,5 +76,6 @@ pub mod commands;
 pub mod core;
 pub mod ffmpeg;
 pub mod formats;
+pub mod frame_service;
 pub mod ipc;
 pub mod plugins;
