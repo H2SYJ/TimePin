@@ -2,6 +2,7 @@ import { Card, CardBody, CardHeader, Button, Badge } from '@/components/ui';
 import { useEffect, useState } from 'react';
 import type { PluginInfo, VideoInfo } from '@/types';
 import { useAppStore } from '@/stores/app';
+import { useUpdateStore } from '@/stores/updater';
 import { api } from '@/lib/ipc';
 import type { OrchestrationMode, OrchestrationResult } from '@/types';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap } from 'lucide-react';
@@ -131,6 +132,7 @@ export function PluginsPage() {
     }
     const taskId = `task-${Date.now()}`;
     const outputDir = `${settings.importDirectory || '.'}/plugin-output/${plugin.name}/${taskId}`;
+    const workToken = useUpdateStore.getState().beginWork('plugin');
     try {
       setRunningTasks((prev) => ({ ...prev, [taskId]: { progress: 0, message: '启动中...' } }));
       const result = await api.runPlugin(plugin.name, video, {}, outputDir);
@@ -148,6 +150,8 @@ export function PluginsPage() {
         delete next[taskId];
         return next;
       });
+    } finally {
+      useUpdateStore.getState().endWork(workToken);
     }
   };
 
@@ -172,6 +176,7 @@ export function PluginsPage() {
       return;
     }
     setOrchestrationRunning(true);
+    const workToken = useUpdateStore.getState().beginWork('plugin');
     setOrchestrationProgress({ completed: 0, total: selectedPlugins.size, stage: 'started' });
     setOrchestrationResult(null);
     setLogs((prev) => [
@@ -206,6 +211,7 @@ export function PluginsPage() {
       setLogs((prev) => [...prev.slice(-99), `[BATCH ERROR] ${e?.message || e}`]);
     } finally {
       setOrchestrationRunning(false);
+      useUpdateStore.getState().endWork(workToken);
     }
   };
 

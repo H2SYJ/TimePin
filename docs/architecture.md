@@ -29,6 +29,7 @@
 | `formats/` | `mod.rs` | `video.txt`（OGM）/ `video.csv`（PR 标记）/ `video.xml`（FCP7）生成器 + golden file 测试 |
 | `ffmpeg/` | `mod.rs` | `export_segments`：流复制 `-c copy` 导出片段 |
 | `plugins/` | `manifest.rs` `manager.rs` `protocol.rs` `runtime.rs` | 插件清单校验、进程生命周期管理、JSON-RPC 协议、Sidecar spawn/stdio 通信 |
+| `commands/updater.rs` | `updater.rs` | `get_updater_config`：返回版本化的更新器配置状态（schemaVersion/configured），由 Rust 侧读取合并后的插件 pubkey |
 | `ipc/` | `mod.rs` | `ImportProgressEvent`/`ExportProgressEvent` schema 定义（`SCHEMA_VERSION = "1.0.0"`） |
 | `lib.rs` | — | Tauri Builder：注册 14 个命令 + `PluginManager` setup |
 
@@ -117,6 +118,7 @@ discovered → validated → started → ready → running → stopped | crashed
 - `builtin_plugin_dirs()` 依次尝试：CWD 祖先 `plugins/`（开发）→ `resource_dir/plugins/`（生产）
 - 运行时依赖：Python/Node 插件需要用户在 PATH 安装对应解释器；`binary` 类型插件直接执行（externalBin 待接入）
 - FFmpeg/FFprobe：`core/tools.rs` 的 `resolve_ffmpeg` 尝试 `settings.ffmpegPath` → `resource_dir/bin/` → PATH
+- **更新器**：`tauri.conf.json` `plugins.updater` 固定指向 `https://github.com/H2SYJ/TimePin/releases/latest/download/latest.json`；开发配置中 `pubkey` 留空表示未配置，构建覆盖文件注入仓库变量 `TAURI_UPDATER_PUBLIC_KEY`。Release 流水线仅在 `main` 分支构建四个显式目标平台，构建 job 只读产物，单个聚合 job 验签后生成完整 `latest.json` 与 `SHA256SUMS` 并创建草稿 Release（人工检查后发布）。
 
 ## 7. 已实现边界与缺口
 

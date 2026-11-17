@@ -26,6 +26,7 @@ import { RoiSelector } from '@/features/recognition/RoiSelector';
 import { RecognitionPreview } from '@/features/recognition/RecognitionPreview';
 import { api } from '@/lib/ipc';
 import { cn } from '@/lib/utils';
+import { useUpdateStore } from '@/stores/updater';
 import type { NormalizedRect } from '@/types';
 
 interface TemplateMatchConfig {
@@ -181,6 +182,7 @@ export function RecognitionPanel({
     setCurrentTask('template');
     setProgress(0);
     setLogs([]);
+    const workToken = useUpdateStore.getState().beginWork('recognition');
 
     try {
       addLog(`开始模板匹配: ${templateConfig.templateName}`);
@@ -219,6 +221,7 @@ export function RecognitionPanel({
       setRunning(false);
       setCurrentTask(null);
       setProgress(1);
+      useUpdateStore.getState().endWork(workToken);
     }
   }, [templateConfig, videoPath, addLog, onResultsChange, generatePreview]);
 
@@ -227,6 +230,7 @@ export function RecognitionPanel({
     setCurrentTask('ocr');
     setProgress(0);
     setLogs([]);
+    const workToken = useUpdateStore.getState().beginWork('recognition');
 
     try {
       addLog('开始 OCR 识别');
@@ -263,6 +267,7 @@ export function RecognitionPanel({
       setRunning(false);
       setCurrentTask(null);
       setProgress(1);
+      useUpdateStore.getState().endWork(workToken);
     }
   }, [ocrConfig, videoPath, addLog, onResultsChange, generatePreview]);
 
@@ -271,6 +276,7 @@ export function RecognitionPanel({
     setCurrentTask('detect');
     setProgress(0);
     setLogs([]);
+    const workToken = useUpdateStore.getState().beginWork('recognition');
 
     try {
       addLog('开始目标检测');
@@ -306,6 +312,7 @@ export function RecognitionPanel({
       setRunning(false);
       setCurrentTask(null);
       setProgress(1);
+      useUpdateStore.getState().endWork(workToken);
     }
   }, [detectConfig, videoPath, addLog, onResultsChange, generatePreview]);
 
