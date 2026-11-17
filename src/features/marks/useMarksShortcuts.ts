@@ -11,7 +11,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable
     || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
-    || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') !== null;
+    // HeroUI Select 的 trigger 是 <button role="combobox">，按 m/r 不应触发打标快捷键。
+    || target.getAttribute('role') === 'combobox'
+    || target.getAttribute('aria-haspopup') === 'listbox'
+    || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="combobox"]') !== null;
 }
 
 export function resolveMarksShortcut(event: KeyboardEvent): 'point' | 'interval' | 'cancel' | null {

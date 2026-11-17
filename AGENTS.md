@@ -66,6 +66,9 @@ timepin/
 - 使用 **HeroUI v2**（`@heroui/react`，基于 React Aria）+ Tailwind CSS v3；统一通过 `src/components/ui` 的封装组件调用，业务代码不直接散落使用 HeroUI 原生 props
 - 语义色板使用 HeroUI 设计 token：`bg-background`、`text-foreground`、`text-default-400/500`、`bg-default-50/100`、`border-divider`、`text-primary`；旧 shadcn 变量（`muted-foreground`、`secondary`、`accent` 等）仅保留在 `index.css` 作兼容别名，新代码一律使用 default/foreground/divider 语义类
 - 交互 props 遵循 React Aria 习惯：`onPress`/`onValueChange`/`isDisabled`/`selectedKeys`，不再用原生 `onClick`/`onChange`/`disabled` 驱动 HeroUI 组件
+- 表单布局统一走 `FormSection`（卡片 + h2 + description + space-y-5）与 `FormField`（左 180px 标签列 + 右控件，附 `hint`/`error`）；不要在业务页里各自再写一份 `Section`/`Field`。`FormField` 接 `labelAuto` 可折叠为自适应标签列，适合内联工具栏
+- 选择器控件分级：少量互斥选项（≤3）用 `SelectButtonGroup` 分段按钮；选项多或需要可滚动列表用 `Select`/`SelectItem`；布尔用 `Switch`（带 `label` 内嵌）或 `Checkbox`（带 `label`/`children`）；**禁止** 手写 `<input type="checkbox">` 与 `<select>`，统一走 ui/index.tsx 的封装
+- 进度条用 `Progress`（`value` 为 0–100），`<progress>`/手写 div 进度条不要出现；颜色 `text-success`/`text-warning`/`text-danger`/`text-primary` 是 HeroUI 语义色，可继续用，但 `bg-muted`、`text-muted-foreground`、`bg-secondary`、`bg-accent` 等旧 shadcn 别名禁止在新代码出现
 - 主色调：中性灰 + 单一品牌色（蓝色系 `primary`）
 - 圆角：`rounded-lg` (8px) 为基础，卡片 `rounded-xl` (12px)，按钮 `rounded-md` (6px)
 - 间距：基于 4px 网格（`gap-4`、`p-4`、`m-4` 等）

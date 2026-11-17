@@ -193,9 +193,16 @@ export function MarksPage() {
         </div>
         {video ? <div className="flex max-w-full items-center gap-3">
           <label htmlFor="marks-video" className="shrink-0 text-sm font-medium">当前视频</label>
-          <select id="marks-video" value={video.id} onChange={(event) => selectVideo(event.target.value)}
-            className="min-h-10 min-w-0 max-w-xs rounded-lg border border-divider bg-background px-3 text-sm focus-visible:outline-primary">
-            {videos.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          <select
+            id="marks-video"
+            value={video.id}
+            onChange={(event) => selectVideo(event.target.value)}
+            aria-label="当前视频"
+            className="min-h-10 min-w-0 max-w-xs rounded-lg border border-divider bg-background px-3 text-sm text-foreground transition-colors hover:border-default-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            {videos.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
           </select>
         </div> : null}
       </header>
