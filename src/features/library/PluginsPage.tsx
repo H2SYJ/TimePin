@@ -4,8 +4,9 @@ import type { PluginInfo, VideoInfo } from '@/types';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
 import type { OrchestrationMode, OrchestrationResult } from '@/types';
-import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap } from 'lucide-react';
+import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap, Github } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { GitHubPluginDiscovery } from '@/features/library/GitHubPluginDiscovery';
 
 export function PluginsPage() {
   const { settings } = useAppStore();
@@ -19,6 +20,8 @@ export function PluginsPage() {
   const [orchestrationRunning, setOrchestrationRunning] = useState(false);
   const [orchestrationProgress, setOrchestrationProgress] = useState<{ completed: number; total: number; stage: string } | null>(null);
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null);
+  // 标签页状态
+  const [activeTab, setActiveTab] = useState<'local' | 'discover'>('local');
 
   useEffect(() => {
     let disposed = false;
@@ -266,6 +269,122 @@ export function PluginsPage() {
         </Button>
       </div>
 
+      {/* 标签页：本地插件 / 发现插件 */}
+      <div className="flex-1 flex flex-col">
+        <div className="flex gap-1 border-b border-divider pb-1">
+          <button
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-t-lg transition-colors',
+              activeTab === 'local'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-default-500 hover:text-foreground hover:bg-default-100'
+            )}
+            onClick={() => setActiveTab('local')}
+          >
+            <Code className="mr-1 h-4 w-4 inline" aria-hidden="true" />
+            本地插件 ({plugins.length})
+          </button>
+          <button
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-t-lg transition-colors',
+              activeTab === 'discover'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-default-500 hover:text-foreground hover:bg-default-100'
+            )}
+            onClick={() => setActiveTab('discover')}
+          >
+            <Github className="mr-1 h-4 w-4 inline" aria-hidden="true" />
+            发现插件
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0">
+          {activeTab === 'local' && (
+            <LocalPluginsTab
+              plugins={plugins}
+              loading={loading}
+              selectedVideo={selectedVideo}
+              runningTasks={runningTasks}
+              onRun={handleRun}
+              onCancel={handleCancel}
+              onStop={handleStopPlugin}
+              selectedPlugins={selectedPlugins}
+              onToggleSelected={togglePluginSelected}
+              orchestrationMode={orchestrationMode}
+              setOrchestrationMode={setOrchestrationMode}
+              orchestrationRunning={orchestrationRunning}
+              orchestrationProgress={orchestrationProgress}
+              orchestrationResult={orchestrationResult}
+              handleRunSelected={handleRunSelected}
+              toggleAllPlugins={toggleAllPlugins}
+              logs={logs}
+              setLogs={setLogs}
+            />
+          )}
+
+          {activeTab === 'discover' && (
+            <GitHubPluginDiscovery />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface LocalPluginsTabProps {
+  plugins: PluginInfo[];
+  loading: boolean;
+  selectedVideo: VideoInfo | null;
+  runningTasks: Record<string, { progress: number; message: string }>;
+  onRun: (plugin: PluginInfo, video: VideoInfo | null) => void;
+  onCancel: (pluginName: string, taskId: string) => void;
+  onStop: (pluginName: string) => void;
+  selectedPlugins: Set<string>;
+  onToggleSelected: (name: string) => void;
+  orchestrationMode: OrchestrationMode;
+  setOrchestrationMode: (mode: OrchestrationMode) => void;
+  orchestrationRunning: boolean;
+  orchestrationProgress: { completed: number; total: number; stage: string } | null;
+  orchestrationResult: OrchestrationResult | null;
+  handleRunSelected: () => void;
+  toggleAllPlugins: () => void;
+  logs: string[];
+  setLogs: React.Dispatch<React.SetStateAction<string[]>>;
+}
+
+function LocalPluginsTab({
+  plugins,
+  loading,
+  selectedVideo,
+  runningTasks,
+  onRun,
+  onCancel,
+  onStop,
+  selectedPlugins,
+  onToggleSelected,
+  orchestrationMode,
+  setOrchestrationMode,
+  orchestrationRunning,
+  orchestrationProgress,
+  orchestrationResult,
+  handleRunSelected,
+  toggleAllPlugins,
+  logs,
+  setLogs,
+}: LocalPluginsTabProps) {
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-default-400">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span className="text-sm">加载插件中…</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-auto">
       {/* M4 编排工具栏 */}
       {plugins.length > 0 && (
         <Card className="rounded-2xl border-divider bg-default-50/50 p-4">
@@ -345,11 +464,11 @@ export function PluginsPage() {
               plugin={plugin}
               selectedVideo={selectedVideo}
               runningTasks={runningTasks}
-              onRun={handleRun}
-              onCancel={handleCancel}
-              onStop={handleStopPlugin}
+              onRun={onRun}
+              onCancel={onCancel}
+              onStop={onStop}
               selected={selectedPlugins.has(plugin.name)}
-              onToggleSelected={() => togglePluginSelected(plugin.name)}
+              onToggleSelected={() => onToggleSelected(plugin.name)}
               selectable={plugin.status === 'ready' || plugin.status === 'crashed'}
             />
           ))

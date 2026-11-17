@@ -55,6 +55,9 @@ pub fn run() {
             crate::commands::recognition::recognition_roi_load,
             crate::commands::recognition::recognition_roi_list,
             crate::commands::recognition::recognition_configure,
+            // GitHub 插件发现命令
+            crate::commands::github_plugins::discover_github_plugins,
+            crate::commands::github_plugins::install_github_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
