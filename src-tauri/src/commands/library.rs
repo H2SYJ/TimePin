@@ -7,7 +7,13 @@ pub async fn import_video(
     app_handle: AppHandle,
     source_path: PathBuf,
 ) -> Result<ImportResult, String> {
-    crate::core::library::import_video(&app_handle, source_path).map_err(|e| e.to_string())
+    // 导入内部做 fs::copy + ffprobe + 缩略图三个阻塞子进程，
+    // 必须 spawn_blocking 以免阻塞 tokio worker。
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::library::import_video(&app_handle, source_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -25,7 +31,12 @@ pub async fn get_video_metadata(
     app_handle: AppHandle,
     path: PathBuf,
 ) -> Result<VideoMetadata, String> {
-    crate::core::library::get_video_metadata(&app_handle, &path).map_err(|e| e.to_string())
+    // ffprobe 子进程是同步阻塞调用，包 spawn_blocking。
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::library::get_video_metadata(&app_handle, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -34,10 +45,15 @@ pub async fn generate_thumbnail(
     video_path: PathBuf,
     video_id: String,
 ) -> Result<PathBuf, String> {
-    let duration = crate::core::library::get_video_by_id(&app_handle, &video_id)
-        .map(|video| video.duration)
-        .unwrap_or(0.0);
+    // ffprobe + ffmpeg 子进程是同步阻塞调用，包 spawn_blocking。
+    tauri::async_runtime::spawn_blocking(move || {
+        let duration = crate::core::library::get_video_by_id(&app_handle, &video_id)
+            .map(|video| video.duration)
+            .unwrap_or(0.0);
 
-    crate::core::library::generate_thumbnail(&app_handle, &video_path, &video_id, duration)
-        .map_err(|e| e.to_string())
+        crate::core::library::generate_thumbnail(&app_handle, &video_path, &video_id, duration)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { applyTheme as applyDocumentTheme } from '@/lib/theme';
 import { api } from '@/lib/ipc';
 import type { Settings, Theme, VideoInfo } from '@/types';
 
@@ -19,18 +20,8 @@ const defaultSettings: Settings = {
   windowState: null,
 };
 
-function systemPrefersDark(): boolean {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-color-scheme: dark)').matches;
-}
-
 function applyTheme(theme: Theme): void {
-  if (typeof document === 'undefined') return;
-  document.documentElement.classList.toggle(
-    'dark',
-    theme === 'dark' || (theme === 'system' && systemPrefersDark()),
-  );
+  applyDocumentTheme(theme);
 }
 
 interface AppState {
@@ -112,22 +103,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     const failures: string[] = [];
     let imported = 0;
     let skipped = 0;
+    const maxConcurrent = Math.max(1, get().settings.maxConcurrentImports || 1);
 
     try {
-      for (const path of paths) {
-        try {
-          const result = await api.importVideo(path);
-          if (!result.success) {
-            failures.push(`${path}: ${result.error ?? '导入失败'}`);
-          } else if (result.skipped) {
-            skipped += 1;
-          } else {
-            imported += 1;
+      // 有界并发导入：消费 settings.maxConcurrentImports，
+      // 避免全部串行（慢）或无界并行（磁盘 IO 风暴）。
+      const queue = [...paths];
+      const workers = Array.from({ length: Math.min(maxConcurrent, queue.length) }, () =>
+        (async () => {
+          while (queue.length > 0) {
+            const path = queue.shift()!;
+            try {
+              const result = await api.importVideo(path);
+              if (!result.success) {
+                failures.push(`${path}: ${result.error ?? '导入失败'}`);
+              } else if (result.skipped) {
+                skipped += 1;
+              } else {
+                imported += 1;
+              }
+            } catch (error) {
+              failures.push(`${path}: ${String(error)}`);
+            }
           }
-        } catch (error) {
-          failures.push(`${path}: ${String(error)}`);
-        }
-      }
+        })(),
+      );
+      await Promise.all(workers);
       await get().refreshVideos();
       const parts = [`已导入 ${imported} 个视频`];
       if (skipped > 0) parts.push(`跳过 ${skipped} 个重复项`);

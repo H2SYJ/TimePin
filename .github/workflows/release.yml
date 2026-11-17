@@ -72,6 +72,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
 
+      - name: Frontend tests
+        run: pnpm test
+
       - name: Frontend build (tsc + vite)
         run: pnpm build
 

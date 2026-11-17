@@ -1,5 +1,5 @@
 import { Film, ImageOff, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Badge, Button, Card, CardBody } from '@/components/ui';
 import { fileSrc } from '@/lib/ipc';
 import { cn, formatDuration, formatFileSize } from '@/lib/utils';
@@ -15,6 +15,8 @@ function Thumbnail({ video }: { video: VideoInfo }) {
       <img
         src={src}
         alt={`${video.name} 缩略图`}
+        loading="lazy"
+        decoding="async"
         onError={() => setFailed(true)}
         className="h-full w-full object-cover"
       />
@@ -29,7 +31,7 @@ function Thumbnail({ video }: { video: VideoInfo }) {
   );
 }
 
-export function VideoCard({ video }: { video: VideoInfo }) {
+export const VideoCard = memo(function VideoCard({ video }: { video: VideoInfo }) {
   const selected = useAppStore((state) => state.selectedVideoId === video.id);
   const selectVideo = useAppStore((state) => state.selectVideo);
   const deleteVideo = useAppStore((state) => state.deleteVideo);
@@ -123,4 +125,4 @@ export function VideoCard({ video }: { video: VideoInfo }) {
       </CardBody>
     </Card>
   );
-}
+});

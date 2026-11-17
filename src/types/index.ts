@@ -115,6 +115,15 @@ export interface PluginManifest {
   outputSchema: Record<string, unknown>;
 }
 
+export interface PluginParameterSchema {
+  type?: 'string' | 'number' | 'integer' | 'boolean';
+  title?: string;
+  description?: string;
+  default?: string | number | boolean | null;
+}
+
+export type PluginParametersSchema = Record<string, PluginParameterSchema>;
+
 export interface PluginInfo {
   name: string;
   version: string;
@@ -122,7 +131,7 @@ export interface PluginInfo {
   author: string;
   runtime: string;
   capabilities: string[];
-  parametersSchema: unknown;
+  parametersSchema: PluginParametersSchema;
   dir: string;
   status: 'ready' | 'invalid' | 'crashed' | 'running';
   statusDetail: string | null;
