@@ -73,6 +73,8 @@ timepin/
 - 圆角：`rounded-lg` (8px) 为基础，卡片 `rounded-xl` (12px)，按钮 `rounded-md` (6px)
 - 间距：基于 4px 网格（`gap-4`、`p-4`、`m-4` 等）
 - 字体：统一 `JetBrains Mono`，中文优先 `font-sans`
+- **页面骨架统一**：页面根 = `flex h-full min-h-0 flex-col`；页头 = `border-b border-divider px-8 py-5`（左 h1+描述、右操作区）；主体 = `scrollbar-thin overflow-y-auto px-8 py-6` + `space-y-5`。禁止自造页面骨架。
+- **表单布局统一**：分组用 `Section`（Card 容器 + 标题/描述 + 可选 `trailing`），字段行用 `Field`（`sm:grid-cols-[180px_1fr]` 标签-控件栅格）。控件只允许 `components/ui` 封装件，禁止原生 `input/select/button` 与 shadcn 旧色板（`muted-foreground`/`secondary`/`accent`）。
 
 ## 铁律（不可违反）
 1. **默认绝不修改原 MP4**；只有用户显式选择「内嵌章节」时才允许写回，且必须先提示备份
