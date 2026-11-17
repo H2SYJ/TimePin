@@ -1,6 +1,7 @@
 import { Suspense, useEffect } from 'react';
 import { Sidebar } from '@/components/Sidebar';
 import { LibraryPage } from '@/features/library/LibraryPage';
+import { MarksPage } from '@/features/marks/MarksPage';
 import { PluginsPage } from '@/features/library/PluginsPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useAppStore } from '@/stores/app';
@@ -17,7 +18,7 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
 function Loading() {
   return (
     <div className="flex h-full min-h-0 items-center justify-center">
-      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+      <div className="flex flex-col items-center gap-3 text-default-400">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <span className="text-sm">正在初始化…</span>
       </div>
@@ -56,7 +57,15 @@ export default function App() {
       <Sidebar />
       <ErrorBoundary>
         <PageWrapper>
-          {page === 'library' ? <LibraryPage /> : page === 'plugins' ? <PluginsPage /> : <SettingsPage />}
+          {page === 'library' ? (
+            <LibraryPage />
+          ) : page === 'marks' ? (
+            <MarksPage />
+          ) : page === 'plugins' ? (
+            <PluginsPage />
+          ) : (
+            <SettingsPage />
+          )}
         </PageWrapper>
       </ErrorBoundary>
     </div>

@@ -78,32 +78,39 @@ export function LibraryPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+      <header className="flex items-center justify-between gap-4 px-8 py-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">媒体库</h1>
-          <p className="mt-1 text-sm text-default-500">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">视频库</h1>
+            <span className="rounded-full border border-divider bg-default-50 px-2.5 py-0.5 text-xs font-medium text-default-500">
+              {videos.length} 个视频
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm text-default-500">
             导入本地视频，查看元数据并预览。原视频始终保持不变。
           </p>
         </div>
-        <Button onPress={() => void pickFiles()} isDisabled={importing}>
+        <Button size="md" onPress={() => void pickFiles()} isDisabled={importing}>
           {importing ? (
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
           ) : (
             <FolderPlus className="h-4 w-4" aria-hidden="true" />
           )}
-          {importing ? '正在导入…' : '选择视频'}
+          {importing ? '正在导入…' : '导入视频'}
         </Button>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <main className="scrollbar-thin min-w-0 flex-1 overflow-y-auto p-8">
+        <main className="scrollbar-thin min-w-0 flex-1 overflow-y-auto px-8 pb-8">
           <div
             className={cn(
-              'mb-6 flex min-h-32 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 text-center transition-colors',
-              dragging ? 'border-primary bg-primary-50/60' : 'border-divider bg-default-50',
+              'mb-6 flex min-h-36 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-6 text-center transition-colors',
+              dragging
+                ? 'border-primary bg-primary/10'
+                : 'border-divider/60 bg-default-50/50',
             )}
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-background text-primary">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
               <UploadCloud className="h-5 w-5" aria-hidden="true" />
             </div>
             <div>
@@ -119,9 +126,9 @@ export function LibraryPage() {
               <LoaderCircle className="h-4 w-4 animate-spin" /> 正在加载媒体库…
             </div>
           ) : videos.length === 0 ? (
-            <Card className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-default-100 text-default-400">
-                <Film className="h-6 w-6" />
+            <Card className="flex flex-col items-center justify-center gap-3 rounded-2xl border-divider bg-default-50/50 py-16 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+                <Film className="h-7 w-7" />
               </div>
               <div>
                 <p className="text-sm font-medium">媒体库还是空的</p>
@@ -129,19 +136,13 @@ export function LibraryPage() {
               </div>
             </Card>
           ) : (
-            <>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-sm font-medium">全部视频</h2>
-                <span className="text-xs text-default-400">{videos.length} 项</span>
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {videos.map((video) => <VideoCard key={video.id} video={video} />)}
-              </div>
-            </>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              {videos.map((video) => <VideoCard key={video.id} video={video} />)}
+            </div>
           )}
         </main>
 
-        <aside className="scrollbar-thin hidden w-[320px] shrink-0 overflow-y-auto border-l border-divider bg-default-50 p-5 lg:block xl:w-[380px] 2xl:w-[420px]">
+        <aside className="scrollbar-thin hidden w-[340px] shrink-0 overflow-y-auto border-l border-divider bg-default-50/50 p-6 lg:block xl:w-[380px] 2xl:w-[420px]">
           <VideoDetail />
         </aside>
       </div>
