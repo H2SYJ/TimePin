@@ -10,6 +10,8 @@ import {
   SelectItem,
   Switch as HeroSwitch,
   Chip,
+  Tabs as HeroTabs,
+  Tab as HeroTab,
   type ButtonProps as HeroButtonProps,
   type CardProps as HeroCardProps,
   type InputProps as HeroInputProps,
@@ -165,4 +167,51 @@ export function Badge({ className, children, ...props }: ChipProps) {
       {children}
     </Chip>
   );
+}
+
+export interface TabsProps {
+  value: string;
+  onValueChange: (key: string) => void;
+  children: React.ReactNode;
+  className?: string;
+  'aria-label'?: string;
+}
+
+/**
+ * 简单受控 Tabs：以 <Tab tabKey= title=> 子元素驱动。
+ */
+export function Tabs({ value, onValueChange, children, className, 'aria-label': ariaLabel }: TabsProps) {
+  const tabs: { key: string; title: React.ReactNode; content: React.ReactNode }[] = [];
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    const props = (child as React.ReactElement<TabProps>).props;
+    const key = props.tabKey;
+    if (key == null) return;
+    tabs.push({ key: String(key), title: props.title ?? key, content: props.children });
+  });
+  return (
+    <HeroTabs
+      aria-label={ariaLabel}
+      selectedKey={value}
+      onSelectionChange={(k: React.Key) => onValueChange(String(k))}
+      className={className}
+      variant="underlined"
+    >
+      {tabs.map((t) => (
+        <HeroTab key={t.key} title={t.title}>
+          <div className="pt-4">{t.content}</div>
+        </HeroTab>
+      ))}
+    </HeroTabs>
+  );
+}
+
+export interface TabProps {
+  tabKey: string;
+  title: React.ReactNode;
+  children: React.ReactNode;
+}
+
+export function Tab(_: TabProps) {
+  return null;
 }

@@ -177,3 +177,98 @@ export interface PluginRunFinished {
   error?: string;
   marksCount: number;
 }
+
+/** ========== 识别服务类型（M3） ========== */
+
+export interface NormalizedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TemplateMatchResult {
+  rect: NormalizedRect;
+  confidence: number;
+  scale: number;
+  templateName: string;
+  timestamp: number;
+}
+
+export interface OcrResult {
+  rect: NormalizedRect;
+  text: string;
+  confidence: number;
+  timestamp: number;
+}
+
+export interface DetectionResult {
+  rect: NormalizedRect;
+  label: string;
+  confidence: number;
+  classId: number;
+  timestamp: number;
+}
+
+export interface PreviewFrame {
+  frameIndex: number;
+  timestamp: number;
+  imageBase64: string;
+  width: number;
+  height: number;
+}
+
+export interface RecognitionTemplateMatchParams {
+  taskId: string;
+  videoPath: string;
+  templateName: string;
+  threshold: number;
+  scales?: number[];
+  roi?: NormalizedRect;
+  frameTimestamps?: number[];
+  maxFrames: number;
+}
+
+export interface RecognitionOcrParams {
+  taskId: string;
+  videoPath: string;
+  roi?: NormalizedRect;
+  frameTimestamps?: number[];
+  maxFrames: number;
+  lang?: string;
+}
+
+export interface RecognitionDetectParams {
+  taskId: string;
+  videoPath: string;
+  roi?: NormalizedRect;
+  frameTimestamps?: number[];
+  maxFrames: number;
+}
+
+export interface RecognitionPreviewParams {
+  taskId: string;
+  videoPath: string;
+  timestamp: number;
+  templateMatches?: TemplateMatchResult[];
+  ocrResults?: OcrResult[];
+  detections?: DetectionResult[];
+  rois?: NormalizedRect[];
+  quality?: number;
+}
+
+export interface RecognitionRoiSaveParams {
+  name: string;
+  rect: NormalizedRect;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecognitionRoiLoadParams {
+  name: string;
+}
+
+export interface RecognitionConfigureParams {
+  ocr?: Record<string, unknown>;
+  detector?: Record<string, unknown>;
+  templates?: Record<string, unknown>;
+}
