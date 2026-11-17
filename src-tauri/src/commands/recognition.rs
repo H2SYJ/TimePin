@@ -1,7 +1,7 @@
 use crate::plugins::recognition::{
-    ConfigureParams, DetectParams, OcrParams, PreviewParams, RecognitionProcess,
-    RoiListResponse, RoiLoadParams, RoiLoadResponse, RoiSaveParams, RoiSaveResponse,
-    TemplateMatchParams, TemplateMatchResponse,
+    ConfigureParams, DetectParams, OcrParams, PreviewParams, RecognitionProcess, RoiListResponse,
+    RoiLoadParams, RoiLoadResponse, RoiSaveParams, RoiSaveResponse, TemplateMatchParams,
+    TemplateMatchResponse,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -44,7 +44,6 @@ impl RecognitionState {
             service_dir: service_dir.unwrap_or_else(|| PathBuf::from("plugins/recognition")),
         }
     }
-
 }
 
 /// 确保识别服务进程已启动
@@ -67,7 +66,9 @@ pub async fn recognition_template_match(
     ensure_recognition_process(&state)?;
     let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
     let process = process_guard.as_mut().ok_or("识别服务未启动")?;
-    process.template_match(params, None).map_err(|e| e.to_string())
+    process
+        .template_match(params, None)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

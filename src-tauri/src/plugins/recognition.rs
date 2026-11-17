@@ -14,8 +14,8 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::plugins::protocol::{
-    DetectionResult, NormalizedRect, OcrResult, PreviewFrame,
-    RECOGNITION_PROTOCOL_VERSION, TemplateMatchResult,
+    DetectionResult, NormalizedRect, OcrResult, PreviewFrame, TemplateMatchResult,
+    RECOGNITION_PROTOCOL_VERSION,
 };
 
 const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(300);
@@ -161,7 +161,11 @@ impl RecognitionProcess {
         params: TemplateMatchParams,
         timeout: Option<Duration>,
     ) -> Result<TemplateMatchResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.template_match", serde_json::to_value(params)?, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT))?;
+        let result = self.call_with_timeout(
+            "recognize.template_match",
+            serde_json::to_value(params)?,
+            timeout.unwrap_or(DEFAULT_CALL_TIMEOUT),
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
@@ -170,7 +174,11 @@ impl RecognitionProcess {
         params: OcrParams,
         timeout: Option<Duration>,
     ) -> Result<OcrResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.ocr", serde_json::to_value(params)?, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT))?;
+        let result = self.call_with_timeout(
+            "recognize.ocr",
+            serde_json::to_value(params)?,
+            timeout.unwrap_or(DEFAULT_CALL_TIMEOUT),
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
@@ -179,7 +187,11 @@ impl RecognitionProcess {
         params: DetectParams,
         timeout: Option<Duration>,
     ) -> Result<DetectResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.detect", serde_json::to_value(params)?, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT))?;
+        let result = self.call_with_timeout(
+            "recognize.detect",
+            serde_json::to_value(params)?,
+            timeout.unwrap_or(DEFAULT_CALL_TIMEOUT),
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
@@ -188,27 +200,44 @@ impl RecognitionProcess {
         params: PreviewParams,
         timeout: Option<Duration>,
     ) -> Result<PreviewFrame, RecognitionError> {
-        let result = self.call_with_timeout("recognize.preview", serde_json::to_value(params)?, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT))?;
+        let result = self.call_with_timeout(
+            "recognize.preview",
+            serde_json::to_value(params)?,
+            timeout.unwrap_or(DEFAULT_CALL_TIMEOUT),
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
     pub fn roi_save(&mut self, params: RoiSaveParams) -> Result<RoiSaveResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.roi.save", serde_json::to_value(params)?, DEFAULT_CALL_TIMEOUT)?;
+        let result = self.call_with_timeout(
+            "recognize.roi.save",
+            serde_json::to_value(params)?,
+            DEFAULT_CALL_TIMEOUT,
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
     pub fn roi_load(&mut self, params: RoiLoadParams) -> Result<RoiLoadResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.roi.load", serde_json::to_value(params)?, DEFAULT_CALL_TIMEOUT)?;
+        let result = self.call_with_timeout(
+            "recognize.roi.load",
+            serde_json::to_value(params)?,
+            DEFAULT_CALL_TIMEOUT,
+        )?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
     pub fn roi_list(&mut self) -> Result<RoiListResponse, RecognitionError> {
-        let result = self.call_with_timeout("recognize.roi.list", json!({}), DEFAULT_CALL_TIMEOUT)?;
+        let result =
+            self.call_with_timeout("recognize.roi.list", json!({}), DEFAULT_CALL_TIMEOUT)?;
         serde_json::from_value(result).map_err(|e| RecognitionError::InvalidResponse(e.to_string()))
     }
 
     pub fn configure(&mut self, params: ConfigureParams) -> Result<(), RecognitionError> {
-        let _ = self.call_with_timeout("recognize.configure", serde_json::to_value(params)?, DEFAULT_CALL_TIMEOUT)?;
+        let _ = self.call_with_timeout(
+            "recognize.configure",
+            serde_json::to_value(params)?,
+            DEFAULT_CALL_TIMEOUT,
+        )?;
         Ok(())
     }
 
@@ -272,7 +301,10 @@ impl RecognitionProcess {
             let Some(remaining) = remaining else {
                 return Err(RecognitionError::Timeout(timeout));
             };
-            match self.rx.recv_timeout(remaining.min(Duration::from_millis(250))) {
+            match self
+                .rx
+                .recv_timeout(remaining.min(Duration::from_millis(250)))
+            {
                 Ok(response) if response.id == id => {
                     if let Some(error) = response.error {
                         return Err(RecognitionError::RemoteError {
@@ -382,8 +414,12 @@ pub struct TemplateMatchParams {
     pub max_frames: u32,
 }
 
-fn default_threshold() -> f64 { 0.8 }
-fn default_max_frames() -> u32 { 50 }
+fn default_threshold() -> f64 {
+    0.8
+}
+fn default_max_frames() -> u32 {
+    50
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -449,7 +485,9 @@ pub struct PreviewParams {
     pub quality: u32,
 }
 
-fn default_quality() -> u32 { 80 }
+fn default_quality() -> u32 {
+    80
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -502,10 +540,10 @@ mod tests {
     #[test]
     fn test_normalized_rect_conversion() {
         let rect = NormalizedRect::from_pixels(100, 100, 200, 150, 1920, 1080);
-        assert!((rect.x - 100.0/1920.0).abs() < 0.001);
-        assert!((rect.y - 100.0/1080.0).abs() < 0.001);
-        assert!((rect.width - 200.0/1920.0).abs() < 0.001);
-        assert!((rect.height - 150.0/1080.0).abs() < 0.001);
+        assert!((rect.x - 100.0 / 1920.0).abs() < 0.001);
+        assert!((rect.y - 100.0 / 1080.0).abs() < 0.001);
+        assert!((rect.width - 200.0 / 1920.0).abs() < 0.001);
+        assert!((rect.height - 150.0 / 1080.0).abs() < 0.001);
 
         let (x, y, w, h) = rect.to_pixels(1920, 1080);
         assert_eq!(x, 100);
