@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Download, ExternalLink, Github, Loader2, Star, X, AlertCircle, Info, GitFork, ShieldAlert, KeyRound } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, CardBody, CardHeader, Input, Badge } from '@/components/ui';
+import { Button, Card, CardBody, CardHeader, Checkbox, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/ipc';
 import { cn } from '@/lib/utils';
 import type {
@@ -443,18 +443,17 @@ function InstallConsentModal({ plugin, risk, checked, disabled, onCheckedChange,
             </div>
           )}
 
-          <label className="flex items-start gap-2 cursor-pointer text-sm">
-            <input
-              type="checkbox"
-              checked={checked}
-              onChange={(e) => onCheckedChange(e.target.checked)}
-              className="mt-0.5 h-4 w-4 shrink-0"
-            />
-            <span className="text-default-600">
+          <Checkbox
+            checked={checked}
+            onCheckedChange={onCheckedChange}
+            aria-label="我已了解上述风险并自行承担插件引起的问题"
+            className="items-start"
+          >
+            <span className="text-sm text-default-600">
               我已了解上述风险，<strong>自行承担</strong>由该插件引起的任何问题。
               我确认已查看或信任 <code className="font-mono">{repository.fullName}</code> 的源代码。
             </span>
-          </label>
+          </Checkbox>
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-divider p-4">
           <Button variant="ghost" size="sm" onClick={onCancel}>
@@ -525,18 +524,15 @@ function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel }: 
             }
           }}
         />
-        <label className="flex items-start gap-2 cursor-pointer text-xs text-default-600">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0"
-            disabled={submitting}
-          />
-          <span>
-            记住此 token（写入系统凭据库）。不勾选时仅保存在内存，退出应用后失效。
-          </span>
-        </label>
+        <Checkbox
+          checked={remember}
+          onCheckedChange={setRemember}
+          isDisabled={submitting}
+          aria-label="记住此 token"
+          labelClassName="text-xs"
+        >
+          记住此 token（写入系统凭据库）。不勾选时仅保存在内存，退出应用后失效。
+        </Checkbox>
         {networkDisabled && (
           <p className="text-xs text-warning" role="status">
             请求已暂停，等待限制解除后才能验证 Token。

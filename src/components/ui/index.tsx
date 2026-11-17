@@ -14,6 +14,7 @@ import {
   Select as HeroSelect,
   SelectItem,
   Switch as HeroSwitch,
+  Checkbox as HeroCheckbox,
   Chip,
   Tabs as HeroTabs,
   Tab as HeroTab,
@@ -23,6 +24,7 @@ import {
   type ModalProps,
   type SelectProps as HeroSelectProps,
   type SwitchProps as HeroSwitchProps,
+  type CheckboxProps as HeroCheckboxProps,
   type ChipProps,
 } from '@heroui/react';
 import { cn } from '@/lib/utils';
@@ -141,6 +143,168 @@ export type { ModalProps };
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return <label className={cn('text-sm font-medium text-foreground', className)} {...props} />;
+}
+
+/**
+ * 统一表单复选框。对 HeroUI Checkbox 的语义封装，保证跨页面一致的勾选交互与主题色。
+ * 交互 props 遵循 React Aria：isSelected / onValueChange / isDisabled。
+ */
+export interface CheckboxProps extends Omit<HeroCheckboxProps, 'isSelected' | 'onValueChange' | 'children'> {
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
+  label?: React.ReactNode;
+  labelClassName?: string;
+}
+
+export function Checkbox({ checked, onCheckedChange, label, labelClassName, className, children, ...props }: CheckboxProps & { children?: React.ReactNode }) {
+  const content = children ?? label;
+  return (
+    <label className={cn('flex cursor-pointer items-start gap-2 text-sm', props.isDisabled && 'cursor-not-allowed opacity-50', className)}>
+      <HeroCheckbox
+        isSelected={checked}
+        onValueChange={onCheckedChange}
+        aria-label={props['aria-label'] ?? (typeof content === 'string' ? content : undefined)}
+        className="mt-0.5 shrink-0"
+        {...props}
+      />
+      {content != null && <span className={cn('text-default-600 leading-normal', labelClassName)}>{content}</span>}
+    </label>
+  );
+}
+
+/**
+ * 紧凑分段选择器：适合 2–4 个互斥选项（如「串行/并行」），
+ * 视觉上是带边框的分段按钮组，比下拉 Select 更直观。
+ */
+export interface SelectButtonGroupOption<T extends string> {
+  value: T;
+  label: React.ReactNode;
+  title?: string;
+}
+
+export interface SelectButtonGroupProps<T extends string> {
+  value: T;
+  onValueChange: (value: T) => void;
+  options: SelectButtonGroupOption<T>[];
+  isDisabled?: boolean;
+  size?: 'sm' | 'md';
+  'aria-label'?: string;
+  className?: string;
+}
+
+export function SelectButtonGroup<T extends string>({
+  value,
+  onValueChange,
+  options,
+  isDisabled,
+  size = 'sm',
+  'aria-label': ariaLabel,
+  className,
+}: SelectButtonGroupProps<T>) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={cn('inline-flex items-center gap-0.5 rounded-lg border border-divider bg-default-100 p-0.5', className)}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            title={option.title}
+            aria-pressed={active}
+            disabled={isDisabled}
+            onClick={() => onValueChange(option.value)}
+            className={cn(
+              'rounded-md font-medium transition-colors',
+              size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm',
+              active
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-default-500 hover:text-foreground disabled:hover:text-default-500',
+              isDisabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * 设置区段：Card 容器 + 标题/描述 + 垂直表单栈。
+ * SettingsPage 与各配置页统一使用，保证页面风格一致。
+ */
+export function FormSection({
+  title,
+  description,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <Card className={cn('rounded-2xl border-divider bg-default-50/50 p-6', className)}>
+      <div className="mb-5">
+        <h2 className="text-base font-semibold">{title}</h2>
+        {description && <p className="mt-1 text-sm text-default-500">{description}</p>}
+      </div>
+      <div className="space-y-5">{children}</div>
+    </Card>
+  );
+}
+
+/**
+ * 表单字段行：左栏 label + hint，右栏控件 + error。
+ * 与 SettingsPage 的网格布局保持一致（sm 以上 180px 标签列）。
+ * labelWidth 覆盖标签列宽度（'auto' 用于内联工具栏等紧凑场景）。
+ */
+export function FormField({
+  label,
+  hint,
+  fieldId,
+  error,
+  children,
+  className,
+  labelAuto = false,
+}: {
+  label: React.ReactNode;
+  hint?: string;
+  fieldId?: string;
+  error?: string;
+  children: React.ReactNode;
+  className?: string;
+  /** true = 标签列用 auto 宽度（适合内联工具栏）；false = 固定 180px（默认，表单页风格）。 */
+  labelAuto?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        'grid grid-cols-1 items-start gap-2 sm:gap-4',
+        labelAuto ? 'sm:grid-cols-[auto_minmax(0,1fr)]' : 'sm:grid-cols-[180px_minmax(0,1fr)]',
+        className
+      )}
+    >
+      <div>
+        <Label htmlFor={fieldId}>{label}</Label>
+        {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
+      </div>
+      <div>
+        {children}
+        {error && (
+          <p id={fieldId ? `${fieldId}-error` : undefined} role="alert" className="mt-1.5 text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export interface SwitchProps extends Omit<HeroSwitchProps, 'onChange'> {

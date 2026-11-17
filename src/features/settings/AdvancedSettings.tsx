@@ -1,6 +1,6 @@
 import { Copy, Download, FolderOpen, Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Button, Card, Input } from '@/components/ui';
+import { Button, Card, Input, Progress, Switch } from '@/components/ui';
 import { api, isTauri } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
 import type { AdvancedSettingsInfo, DependencyReport, EnvRebuildResult, Settings } from '@/types';
@@ -192,7 +192,12 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
             <Button variant="secondary" isDisabled={!desktop || busy} aria-label="浏览 Python 解释器" onPress={() => void browsePython()}>浏览文件</Button>
           </div>
           <label className="flex items-center gap-3 rounded-lg border border-divider p-3 text-sm">
-            <input type="checkbox" checked={draft.useSystemPython} onChange={(event) => patch('useSystemPython', event.target.checked)} disabled={busy} className="h-4 w-4 accent-primary" aria-label="允许使用系统 Python" />
+            <Switch
+              checked={draft.useSystemPython}
+              onCheckedChange={(checked) => patch('useSystemPython', checked)}
+              isDisabled={busy}
+              aria-label="允许使用系统 Python"
+            />
             <span>允许使用系统 Python 作为回退（内嵌运行时不可用时尝试 PATH 中的 python/python3）</span>
           </label>
           <div className="flex flex-wrap items-center gap-2">
@@ -251,7 +256,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
           <p className="break-all text-xs text-default-500">依赖安装目录：{info?.installDirectory ?? (desktop ? '正在读取…' : '仅桌面应用可用')}</p>
           {installer.progress && <div role="status" className="space-y-2 rounded-lg bg-default-100 p-3 text-sm" aria-live="polite">
             <p>{stages[installer.progress.stage]} · {Math.round(installer.progress.progress * 100)}% — {installer.progress.message}</p>
-            <progress className="h-2 w-full accent-primary" aria-label="依赖安装进度" max={1} value={installer.progress.progress} />
+            <Progress value={installer.progress.progress * 100} className="h-2 w-full" label="依赖安装进度" />
           </div>}
           {installer.error && <div role="alert" className="space-y-2 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm">
             <p className="font-medium text-danger">依赖安装失败，可重试；原有工具配置未更改。</p>
