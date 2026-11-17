@@ -11,3 +11,7 @@ pnpm-debug.log*
 !.env.example
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
+build/
+.venv-tpv/
