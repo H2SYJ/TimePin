@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "timepin-vision"
+version = "0.1.0"
+description = "Shared vision toolkit for TimePin plugins — template matching, OCR, digit diff."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "LicenseRef-Proprietary"
+authors = [{ name = "TimePin Team" }]
+keywords = ["timepin", "cv", "ocr", "template-matching", "onnx"]
+
+# 运行依赖与 issue 约束一致：opencv-python / onnxruntime / numpy / rapidocr-onnxruntime。
+# 上限放宽到 <3，避免与宿主 Python 其他插件冲突。
+dependencies = [
+    "opencv-python>=4.8,<5",
+    "onnxruntime>=1.16,<2",
+    "numpy>=1.24,<2",
+    "rapidocr-onnxruntime>=1.3,<2",
+]
+
+[project.optional-dependencies]
+# 测试 & 本地开发；不包含 pytest-cov 等重型依赖
+dev = [
+    "pytest>=7.4",
+]
+
+# 打包 wheel 时把源码、README、py.typed 标记一起放进包内
+[tool.setuptools]
+package-dir = { "" = "." }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["timepin_vision*"]
+namespaces = false
