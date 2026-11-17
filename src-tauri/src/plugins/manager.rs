@@ -99,7 +99,9 @@ struct ManagedPlugin {
     status: String,
     status_detail: Option<String>,
     state: ProcessState,
-    process: Option<PluginProcess>,
+    /// Arc<Mutex> 包装：run_plugin 在锁外执行长 RPC，
+    /// 锁内只做「取 Arc / 存新进程」的短操作，保证 cancel/stop 可达。
+    process: Option<Arc<Mutex<PluginProcess>>>,
 }
 
 /// 插件管理器：持有所有已发现插件及其进程。
@@ -238,11 +240,12 @@ impl PluginManager {
         let need_spawn = if p.state == ProcessState::Crashed {
             true
         } else {
-            match p.process.as_mut() {
+            match p.process.as_ref() {
                 None => true,
                 Some(process) => {
                     // 进程句柄存在但已退出 → crashed
-                    if process.is_alive() {
+                    let alive = process.lock().expect("process mutex").is_alive();
+                    if alive {
                         false
                     } else {
                         p.state = ProcessState::Crashed;
@@ -255,8 +258,10 @@ impl PluginManager {
             return Ok(());
         }
         // 旧进程尽力回收
-        if let Some(mut old) = p.process.take() {
-            old.shutdown(Duration::from_secs(2));
+        if let Some(old) = p.process.take() {
+            if let Ok(mut guard) = old.lock() {
+                guard.shutdown(Duration::from_secs(2));
+            }
         }
         let app = self.app.clone();
         let plugin_name = p.manifest.name.clone();
@@ -264,7 +269,7 @@ impl PluginManager {
             handle_notification(&app, &plugin_name, notification);
         });
         let process = PluginProcess::spawn(p.manifest.clone(), &p.dir, Some(on_notify))?;
-        p.process = Some(process);
+        p.process = Some(Arc::new(Mutex::new(process)));
         p.state = ProcessState::Ready;
         p.status = "ready".to_string();
         p.status_detail = None;
@@ -277,8 +282,10 @@ impl PluginManager {
     pub fn stop(&self, name: &str) -> Result<(), PluginError> {
         let plugin = self.get(name)?;
         let mut p = plugin.lock().expect("plugin mutex poisoned");
-        if let Some(mut process) = p.process.take() {
-            process.shutdown(Duration::from_secs(3));
+        if let Some(process) = p.process.take() {
+            if let Ok(mut guard) = process.lock() {
+                guard.shutdown(Duration::from_secs(3));
+            }
         }
         p.state = ProcessState::Ready;
         if p.status != "invalid" {
@@ -293,8 +300,10 @@ impl PluginManager {
         let plugins = self.plugins.lock().expect("plugins mutex poisoned");
         for plugin in plugins.values() {
             let mut p = plugin.lock().expect("plugin mutex poisoned");
-            if let Some(mut process) = p.process.take() {
-                process.shutdown(Duration::from_secs(2));
+            if let Some(process) = p.process.take() {
+                if let Ok(mut guard) = process.lock() {
+                    guard.shutdown(Duration::from_secs(2));
+                }
             }
         }
     }
@@ -357,18 +366,24 @@ impl PluginManager {
         };
 
         let plugin_name = name.to_string();
-        let result = {
+        // 取进程 Arc 并标记 running，然后释放锁 — 长 RPC 在锁外执行，
+        // 保证 cancel/stop/reload 在运行期间可达。
+        let process_arc = {
             let mut p = plugin.lock().expect("plugin mutex poisoned");
             p.state = ProcessState::Running;
             self.emit_status(&plugin_name, "running", None);
-            match p.process.as_mut() {
-                Some(process) => process.run(
+            p.process.clone()
+        };
+        let result = match process_arc {
+            Some(process) => {
+                let mut guard = process.lock().expect("process mutex poisoned");
+                guard.run(
                     serde_json::to_value(&run_params)
                         .map_err(|e| PluginError::Task(e.to_string()))?,
                     None,
-                ),
-                None => Err(PluginProcessError::SpawnFailed("进程未启动".to_string())),
+                )
             }
+            None => Err(PluginProcessError::SpawnFailed("进程未启动".to_string())),
         };
 
         let mut p = plugin.lock().expect("plugin mutex poisoned");
@@ -393,9 +408,11 @@ impl PluginManager {
     /// 请求取消某插件的当前任务（尽力而为）
     pub fn cancel(&self, name: &str, task_id: &str) {
         if let Ok(plugin) = self.get(name) {
-            let mut p = plugin.lock().expect("plugin mutex poisoned");
-            if let Some(process) = p.process.as_mut() {
-                process.cancel(task_id);
+            let p = plugin.lock().expect("plugin mutex poisoned");
+            if let Some(process) = p.process.as_ref() {
+                if let Ok(mut guard) = process.lock() {
+                    guard.cancel(task_id);
+                }
             }
         }
     }

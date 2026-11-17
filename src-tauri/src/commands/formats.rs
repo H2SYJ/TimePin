@@ -23,6 +23,12 @@ pub async fn export_segments(
     output_dir: PathBuf,
     export_mode: crate::core::settings::ExportMode,
 ) -> Result<Vec<PathBuf>, String> {
-    crate::ffmpeg::export_segments(&app_handle, &video_path, &marks, &output_dir, export_mode)
-        .map_err(|e| e.to_string())
+    // 导出内部做多个同步 Command::output()，必须 spawn_blocking
+    // 以免长时间占用 tokio worker、导致 UI 失去响应。
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::ffmpeg::export_segments(&app_handle, &video_path, &marks, &output_dir, export_mode)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
