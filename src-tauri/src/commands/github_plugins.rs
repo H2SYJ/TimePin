@@ -592,11 +592,8 @@ pub async fn install_github_plugin(
         crate::plugins::manager::EVENT_PLUGIN_STATUS,
         serde_json::json!({ "pluginName": plugin_name, "status": "ready", "detail": "installed via GitHub" }),
     );
-    Ok(format!(
-        "插件 {} 安装成功，路径: {}",
-        plugin_name,
-        plugin_dir.display()
-    ))
+    // The UI merges this into DiscoveredPlugin.localPath, so return the path only.
+    Ok(plugin_dir.display().to_string())
 }
 
 #[cfg(test)]
