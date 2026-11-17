@@ -1,6 +1,7 @@
 import { Check, Info, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button, Card, Input, Label, Select, SelectItem, Switch } from '@/components/ui';
+import { UpdatePanel } from '@/components/UpdatePanel';
 import { useAppStore } from '@/stores/app';
 import type { ExportMode, Settings, Theme } from '@/types';
 
@@ -202,6 +203,8 @@ export function SettingsPage() {
               </div>
             </Field>
           </Section>
+
+          <UpdatePanel />
 
           <div className="flex items-start gap-3 rounded-2xl border border-primary/25 bg-primary/[0.08] px-4 py-3 text-sm text-default-500">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />

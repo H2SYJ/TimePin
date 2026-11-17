@@ -1,5 +1,12 @@
 /** 所有跨 IPC 的类型与 Rust serde 结构一一对应（camelCase）。 */
 
+export type {
+  UpdateInfo,
+  UpdatePhase,
+  UpdateProgress,
+  UpdaterConfig,
+} from './updater';
+
 export type ExportMode = 'streamCopy' | 'frameAccurate';
 export type Theme = 'light' | 'dark' | 'system';
 
