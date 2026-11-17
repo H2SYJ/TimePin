@@ -2,15 +2,22 @@ import { Card, CardBody, CardHeader, Button, Badge } from '@/components/ui';
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
-import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code } from 'lucide-react';
+import type { OrchestrationMode, OrchestrationResult, PluginInfo, VideoInfo } from '@/types';
+import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function PluginsPage() {
   const { settings } = useAppStore();
-  const [plugins, setPlugins] = useState<any[]>([]);
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Record<string, { progress: number; message: string }>>({});
   const [logs, setLogs] = useState<string[]>([]);
+  // M4：多选插件 + 批量编排
+  const [selectedPlugins, setSelectedPlugins] = useState<Set<string>>(new Set());
+  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('sequential');
+  const [orchestrationRunning, setOrchestrationRunning] = useState(false);
+  const [orchestrationProgress, setOrchestrationProgress] = useState<{ completed: number; total: number; stage: string } | null>(null);
+  const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null);
 
   useEffect(() => {
     loadPlugins();
@@ -40,7 +47,11 @@ export function PluginsPage() {
       setPlugins((prev) =>
         prev.map((p) =>
           p.name === e.pluginName
-            ? { ...p, status: e.status, statusDetail: e.detail || null }
+            ? {
+                ...p,
+                status: e.status as PluginInfo['status'],
+                statusDetail: e.detail || null,
+              }
             : p
         )
       );
@@ -62,11 +73,18 @@ export function PluginsPage() {
         setLogs((prev) => [...prev.slice(-99), `[ERROR] ${e.pluginName}: ${e.error}`]);
       }
     });
+    const unlistenOrchestration = await api.onPluginOrchestration((e) => {
+      setOrchestrationProgress({ completed: e.completed, total: e.total, stage: e.stage });
+      if (e.stage === 'finished') {
+        setOrchestrationRunning(false);
+      }
+    });
     return () => {
       unlistenProgress();
       unlistenStatus();
       unlistenLog();
       unlistenResult();
+      unlistenOrchestration();
     };
   };
 
@@ -80,10 +98,8 @@ export function PluginsPage() {
     }
   };
 
-  const handleRun = async (plugin: any, video: any) => {
+  const handleRun = async (plugin: PluginInfo, video: VideoInfo | null) => {
     setLogs([]);
-    // 在实际应用中会弹出对话框让用户选择视频和参数
-    // 这里演示直接使用第一个视频和默认参数
     if (!video) {
       setLogs(['[WARN] 请先在媒体库选择一个视频']);
       return;
@@ -117,6 +133,72 @@ export function PluginsPage() {
   const handleStopPlugin = async (pluginName: string) => {
     await api.stopPlugin(pluginName);
     loadPlugins();
+  };
+
+  // M4: 批量执行所有选中插件（在选中视频上）
+  const handleRunSelected = async () => {
+    if (selectedPlugins.size === 0) {
+      setLogs(['[WARN] 请先勾选要运行的插件']);
+      return;
+    }
+    if (!selectedVideo) {
+      setLogs(['[WARN] 请先在媒体库选择一个视频']);
+      return;
+    }
+    setOrchestrationRunning(true);
+    setOrchestrationProgress({ completed: 0, total: selectedPlugins.size, stage: 'started' });
+    setOrchestrationResult(null);
+    setLogs((prev) => [
+      ...prev.slice(-99),
+      `[BATCH] 开始编排: ${selectedPlugins.size} 个插件 × 1 个视频, 模式=${orchestrationMode}`,
+    ]);
+    try {
+      const outputDir = `${settings.importDirectory || '.'}/plugin-output/batch-${Date.now()}`;
+      const result = await api.runPlugins({
+        pluginNames: Array.from(selectedPlugins),
+        videos: [selectedVideo],
+        outputDir,
+        mode: orchestrationMode,
+      });
+      setOrchestrationResult(result);
+      setLogs((prev) => [
+        ...prev.slice(-99),
+        `[BATCH OK] 完成：合并后 ${result.totalMarks} 个标注，失败 ${result.failedCount} 个`,
+      ]);
+      // 失败的细节
+      for (const summary of result.videoSummaries) {
+        for (const o of summary.pluginResults) {
+          if (o.outcome !== 'ok') {
+            setLogs((prev) => [
+              ...prev.slice(-99),
+              `[BATCH ${o.outcome.toUpperCase()}] ${o.pluginName}: ${o.error || '未知错误'}`,
+            ]);
+          }
+        }
+      }
+    } catch (e: any) {
+      setLogs((prev) => [...prev.slice(-99), `[BATCH ERROR] ${e?.message || e}`]);
+    } finally {
+      setOrchestrationRunning(false);
+    }
+  };
+
+  const togglePluginSelected = (name: string) => {
+    setSelectedPlugins((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleAllPlugins = () => {
+    const runnable = plugins.filter((p) => p.status === 'ready' || p.status === 'crashed');
+    if (selectedPlugins.size === runnable.length) {
+      setSelectedPlugins(new Set());
+    } else {
+      setSelectedPlugins(new Set(runnable.map((p) => p.name)));
+    }
   };
 
   // 找到当前选中的视频（从 store）
@@ -158,6 +240,62 @@ export function PluginsPage() {
         </Button>
       </div>
 
+      {/* M4 编排工具栏 */}
+      {plugins.length > 0 && (
+        <Card className="rounded-2xl border-divider bg-default-50/50 p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={
+                  selectedPlugins.size > 0 &&
+                  selectedPlugins.size ===
+                    plugins.filter((p) => p.status === 'ready' || p.status === 'crashed').length
+                }
+                onChange={toggleAllPlugins}
+                className="h-4 w-4"
+              />
+              <span className="text-default-600">全选可运行插件</span>
+            </label>
+            <div className="h-4 w-px bg-divider" />
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-default-600">模式</span>
+              <select
+                value={orchestrationMode}
+                onChange={(e) => setOrchestrationMode(e.target.value as OrchestrationMode)}
+                disabled={orchestrationRunning}
+                className="h-8 rounded-md border border-divider bg-background px-2 text-xs"
+              >
+                <option value="sequential">串行</option>
+                <option value="parallel">并行</option>
+              </select>
+            </label>
+            <Button
+              size="sm"
+              onClick={handleRunSelected}
+              disabled={orchestrationRunning || selectedPlugins.size === 0 || !selectedVideo}
+            >
+              {orchestrationRunning ? (
+                <>
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden="true" />
+                  执行中 ({orchestrationProgress?.completed}/{orchestrationProgress?.total})
+                </>
+              ) : (
+                <>
+                  <Zap className="mr-1 h-4 w-4" aria-hidden="true" />
+                  批量运行 ({selectedPlugins.size})
+                </>
+              )}
+            </Button>
+            {orchestrationResult && (
+              <div className="ml-auto text-xs text-default-500">
+                上次结果：{orchestrationResult.totalMarks} 个标注，{orchestrationResult.failedCount} 个失败
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* 插件列表 */}
       <div className="flex-1 overflow-auto space-y-3">
         {plugins.length === 0 ? (
@@ -184,6 +322,9 @@ export function PluginsPage() {
               onRun={handleRun}
               onCancel={handleCancel}
               onStop={handleStopPlugin}
+              selected={selectedPlugins.has(plugin.name)}
+              onToggleSelected={() => togglePluginSelected(plugin.name)}
+              selectable={plugin.status === 'ready' || plugin.status === 'crashed'}
             />
           ))
         )}
@@ -222,12 +363,15 @@ export function PluginsPage() {
 }
 
 interface PluginCardProps {
-  plugin: any;
-  selectedVideo: any;
+  plugin: PluginInfo;
+  selectedVideo: VideoInfo | null;
   runningTasks: Record<string, { progress: number; message: string }>;
-  onRun: (plugin: any, video: any) => void;
+  onRun: (plugin: PluginInfo, video: VideoInfo | null) => void;
   onCancel: (pluginName: string, taskId: string) => void;
   onStop: (pluginName: string) => void;
+  selected: boolean;
+  onToggleSelected: () => void;
+  selectable: boolean;
 }
 
 function PluginCard({
@@ -237,6 +381,9 @@ function PluginCard({
   onRun,
   onCancel,
   onStop,
+  selected,
+  onToggleSelected,
+  selectable,
 }: PluginCardProps) {
   const isRunning = plugin.status === 'running';
   const isReady = plugin.status === 'ready';
@@ -271,6 +418,15 @@ function PluginCard({
       <CardHeader className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
+            {selectable && (
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={onToggleSelected}
+                className="h-4 w-4 shrink-0"
+                aria-label={`选择插件 ${plugin.name}`}
+              />
+            )}
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
               <Code className="h-5 w-5" aria-hidden="true" />
             </div>
@@ -327,23 +483,30 @@ function PluginCard({
         </div>
       </CardHeader>
 
-      {plugin.parametersSchema && Object.keys(plugin.parametersSchema).length > 0 && (
-        <CardBody className="px-4 pb-4 pt-0">
-          <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(plugin.parametersSchema).map(([key, schema]: [string, any]) => (
-              <div key={key} className="space-y-1">
-                <label className="text-xs font-medium text-default-400">{schema.title || key}</label>
-                <input
-                  type={schema.type === 'number' ? 'number' : 'text'}
-                  defaultValue={schema.default ?? ''}
-                  className="w-full h-8 px-2 text-xs bg-background border border-divider rounded-md"
-                  placeholder={schema.description}
-                />
-              </div>
-            ))}
-          </div>
-        </CardBody>
-      )}
+      {(() => {
+        const schema =
+          plugin.parametersSchema && typeof plugin.parametersSchema === 'object'
+            ? (plugin.parametersSchema as Record<string, any>)
+            : null;
+        if (!schema || Object.keys(schema).length === 0) return null;
+        return (
+          <CardBody className="px-4 pb-4 pt-0">
+            <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(schema).map(([key, s]: [string, any]) => (
+                <div key={key} className="space-y-1">
+                  <label className="text-xs font-medium text-default-400">{s.title || key}</label>
+                  <input
+                    type={s.type === 'number' ? 'number' : 'text'}
+                    defaultValue={s.default ?? ''}
+                    className="w-full h-8 px-2 text-xs bg-background border border-divider rounded-md"
+                    placeholder={s.description}
+                  />
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        );
+      })()}
 
       {plugin.statusDetail && (
         <CardBody className="px-4 pb-4 pt-0">

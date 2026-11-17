@@ -5,6 +5,9 @@ import type {
   ExportMode,
   ImportResult,
   Mark,
+  OrchestrationProgress,
+  OrchestrationRequest,
+  OrchestrationResult,
   PluginInfo,
   PluginResult,
   Settings,
@@ -156,6 +159,21 @@ export const api = {
   async cancelPluginRun(pluginName: string, taskId: string): Promise<void> {
     if (!isTauri()) return;
     return tauriInvoke<void>('cancel_plugin_run', { pluginName, taskId });
+  },
+
+  // M4：多插件编排——批量在多个视频上执行多个插件，单点失败隔离 + 结果合并去重
+  async runPlugins(request: OrchestrationRequest): Promise<OrchestrationResult> {
+    if (!isTauri()) {
+      throw new Error('多插件编排需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<OrchestrationResult>('run_plugins', { request });
+  },
+
+  async onPluginOrchestration(
+    handler: (event: OrchestrationProgress) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return tauriListen('plugin://orchestration', (e: any) => handler(e.payload));
   },
 
   // 监听插件事件（返回取消监听函数）
