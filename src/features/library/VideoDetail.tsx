@@ -91,6 +91,9 @@ export function VideoDetail() {
 
       <CardFooter className="border-t border-divider/60 bg-background/40 p-4">
         <div className="w-full">
+          <Button className="mb-4 w-full" onPress={() => useAppStore.getState().setPage('marks')}>
+            进入标注工作台
+          </Button>
           <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-default-400">源文件路径</p>
           <div className="flex items-center gap-2">
             <code

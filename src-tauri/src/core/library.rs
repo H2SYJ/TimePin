@@ -171,7 +171,14 @@ pub fn import_videos(app_handle: &AppHandle, source_paths: Vec<PathBuf>) -> Vec<
 
 /// 获取所有视频列表
 pub fn get_videos(app_handle: &AppHandle) -> Result<Vec<VideoInfo>, Box<dyn std::error::Error>> {
-    let index_path = get_videos_dir(app_handle).join("index.json");
+    load_videos_index(&get_videos_dir(app_handle))
+}
+
+/// 与不依赖 AppHandle 的核心存储服务共用媒体库索引读取逻辑。
+pub(super) fn load_videos_index(
+    videos_dir: &Path,
+) -> Result<Vec<VideoInfo>, Box<dyn std::error::Error>> {
+    let index_path = videos_dir.join("index.json");
     if !index_path.exists() {
         return Ok(Vec::new());
     }
