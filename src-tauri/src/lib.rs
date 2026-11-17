@@ -13,6 +13,8 @@ pub fn run() {
             }
 
             crate::core::init(app.handle())?;
+            // The sole GitHub session owns credentials and serializes all API admission.
+            app.manage(crate::core::github::GitHubClient::new()?);
 
             // Discover bundled, app-owned and saved custom roots without starting processes.
             let custom_dirs = crate::core::settings::load_settings(app.handle())
@@ -66,6 +68,9 @@ pub fn run() {
             crate::commands::recognition::recognition_roi_list,
             crate::commands::recognition::recognition_configure,
             // GitHub 插件发现命令
+            crate::commands::github_plugins::get_github_session,
+            crate::commands::github_plugins::configure_github_token,
+            crate::commands::github_plugins::clear_github_token,
             crate::commands::github_plugins::discover_github_plugins,
             crate::commands::github_plugins::install_github_plugin,
         ])
