@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/stores/app';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 type Page = 'library' | 'marks' | 'plugins' | 'settings';
 
@@ -82,8 +83,9 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* 底部：设置 */}
-      <div className="mt-auto flex flex-col items-center gap-1">
+      {/* 底部：主题切换 + 设置 */}
+      <div className="mt-auto flex flex-col items-center gap-1 w-full px-2">
+        <ThemeToggle />
         {bottomNavigation.map((item) => (
           <RailButton
             key={item.page}
