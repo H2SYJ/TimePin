@@ -80,6 +80,10 @@ describe('manual marks workspace', () => {
     expect(screen.getByRole('button', { name: '添加时间点（M）' })).toBeDisabled();
     fireEvent.keyDown(window, { key: 'm' });
     expect(api.saveMarks).not.toHaveBeenCalled();
+    const earlyPlayer = screen.getByLabelText(`${video.name} 标注播放器`) as HTMLVideoElement;
+    Object.defineProperty(earlyPlayer, 'duration', { configurable: true, value: 100 });
+    fireEvent.durationChange(earlyPlayer);
+    expect(screen.getByRole('button', { name: '添加时间点（M）' })).toBeDisabled();
     const player = readyPlayer(12.345678);
     expect(player).toHaveAttribute('controls');
     expect(player).toHaveAttribute('src', video.path);
