@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://timepin.app/schemas/github-api-v1.schema.json",
+  "title": "TimePin GitHub API IPC v1.0.0",
+  "oneOf": [
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/session" },
+    { "$ref": "#/$defs/discovery" }
+  ],
+  "$defs": {
+    "rateInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "remaining", "resetAt", "resource"],
+      "properties": {
+        "limit": { "type": ["integer", "null"], "minimum": 0 },
+        "remaining": { "type": ["integer", "null"], "minimum": 0 },
+        "resetAt": { "type": ["integer", "null"], "description": "Server-calibrated local epoch milliseconds" },
+        "resource": { "type": ["string", "null"] }
+      }
+    },
+    "nullableRateInfo": {
+      "oneOf": [{ "$ref": "#/$defs/rateInfo" }, { "type": "null" }]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "code", "message", "retryAt", "action", "rateLimit"],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "code": {
+          "enum": ["AUTH_INVALID", "PRIMARY_RATE_LIMIT", "SECONDARY_RATE_LIMIT", "RATE_LIMIT_UNKNOWN", "RATE_WAIT", "NOT_FOUND_OR_PRIVATE", "FORBIDDEN", "CLIENT_ERROR", "SERVER_ERROR", "NETWORK_ERROR"]
+        },
+        "message": { "type": "string" },
+        "retryAt": { "type": ["integer", "null"], "description": "Local epoch milliseconds; null when not applicable" },
+        "action": { "enum": ["WAIT", "CONFIGURE_TOKEN", "REAUTHENTICATE", "NONE"] },
+        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "identity", "remembered", "storageWarning", "rateLimit"],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "identity": { "enum": ["ANONYMOUS", "AUTHENTICATED", "TOKEN_INVALID"] },
+        "remembered": { "type": "boolean" },
+        "storageWarning": { "type": ["string", "null"] },
+        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "required": ["login", "avatarUrl", "htmlUrl"],
+      "properties": {
+        "login": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "htmlUrl": { "type": "string" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "required": ["name", "fullName", "description", "htmlUrl", "cloneUrl", "stargazersCount", "forksCount", "updatedAt", "language", "topics", "owner", "defaultBranch"],
+      "properties": {
+        "name": { "type": "string" },
+        "fullName": { "type": "string" },
+        "description": { "type": ["string", "null"] },
+        "htmlUrl": { "type": "string" },
+        "cloneUrl": { "type": "string" },
+        "stargazersCount": { "type": "integer", "minimum": 0 },
+        "forksCount": { "type": "integer", "minimum": 0 },
+        "updatedAt": { "type": "string" },
+        "language": { "type": ["string", "null"] },
+        "topics": { "type": "array", "items": { "type": "string" } },
+        "owner": { "$ref": "#/$defs/owner" },
+        "defaultBranch": { "type": "string" }
+      }
+    },
+    "discoveredPlugin": {
+      "type": "object",
+      "required": ["repository", "manifest", "manifestError", "isInstalled", "localPath", "verification"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "manifest": { "type": ["object", "null"], "description": "PluginManifest per docs/plugin-protocol.md" },
+        "manifestError": { "type": ["string", "null"] },
+        "isInstalled": { "type": "boolean" },
+        "localPath": { "type": ["string", "null"] },
+        "verification": { "enum": ["verified", "community", "unverified"] }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "plugins", "totalCount", "rateLimit"],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "plugins": { "type": "array", "items": { "$ref": "#/$defs/discoveredPlugin" } },
+        "totalCount": { "type": "integer", "minimum": 0 },
+        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" }
+      }
+    }
+  }
+}

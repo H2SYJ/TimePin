@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 pub mod dependencies;
+pub mod github;
 pub mod library;
 pub mod marks;
 pub mod mp4;

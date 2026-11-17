@@ -37,6 +37,7 @@ import type {
   // GitHub 插件发现类型
   DiscoverPluginsResult,
   InstallPluginParams,
+  GitHubSession,
 } from '@/types';
 
 export function isTauri(): boolean {
@@ -365,18 +366,18 @@ export const api = {
     return tauriListen('recognition://progress', (e: any) => handler(e.payload));
   },
 
-  // GitHub 插件发现 API
+  // GitHub 插件发现 API（token 由 Rust 端托管，前端不持有、不传递）
   async discoverGitHubPlugins(
     page?: number,
     perPage?: number,
-    githubToken?: string,
   ): Promise<DiscoverPluginsResult> {
     if (!isTauri()) {
-      return { plugins: [], totalCount: 0, rateLimitRemaining: null, rateLimitReset: null };
+      return { schemaVersion: '1.0.0', plugins: [], totalCount: 0, rateLimit: null };
     }
-    return tauriInvoke<DiscoverPluginsResult>('discover_github_plugins', { page, per_page: perPage, github_token: githubToken });
+    return tauriInvoke<DiscoverPluginsResult>('discover_github_plugins', { page, perPage });
   },
 
+  /** 安装成功时返回实际插件目录路径，供发现结果合并 localPath。 */
   async installGitHubPlugin(params: InstallPluginParams): Promise<string> {
     if (!isTauri()) {
       throw new Error('插件安装需要在 TimePin 桌面应用中运行');
@@ -385,7 +386,40 @@ export const api = {
       owner: params.owner,
       repo: params.repo,
       branch: params.branch,
-      github_token: params.githubToken,
     });
+  },
+
+  /** 查询当前 GitHub 会话（匿名/已认证/token 失效 + 速率限制快照）。 */
+  async getGitHubSession(): Promise<GitHubSession> {
+    if (!isTauri()) {
+      return {
+        schemaVersion: '1.0.0',
+        identity: 'ANONYMOUS',
+        remembered: false,
+        storageWarning: null,
+        rateLimit: null,
+      };
+    }
+    return tauriInvoke<GitHubSession>('get_github_session');
+  },
+
+  /**
+   * 提交候选 token：后端必须先以 `/user` 200 验证通过才会应用。
+   * remember=false 时仅保存在内存；remember=true 写入系统凭据库。
+   * 失败以 GitHubApiError 对象 reject。
+   */
+  async configureGitHubToken(candidate: string, remember: boolean): Promise<GitHubSession> {
+    if (!isTauri()) {
+      throw new Error('Token 配置需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<GitHubSession>('configure_github_token', { candidate, remember });
+  },
+
+  /** 清除已保存的 GitHub token（内存与凭据库）。 */
+  async clearGitHubToken(): Promise<GitHubSession> {
+    if (!isTauri()) {
+      throw new Error('Token 清除需要在 TimePin 桌面应用中运行');
+    }
+    return tauriInvoke<GitHubSession>('clear_github_token');
   },
 };

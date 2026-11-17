@@ -1,14 +1,66 @@
-import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Download, ExternalLink, Github, Loader2, Star, X, AlertCircle, Info, GitFork, ShieldAlert } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Download, ExternalLink, Github, Loader2, Star, X, AlertCircle, Info, GitFork, ShieldAlert, KeyRound } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Checkbox, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/ipc';
 import { cn } from '@/lib/utils';
-import type { DiscoveredPlugin, DiscoverPluginsResult } from '@/types';
+import type {
+  DiscoveredPlugin,
+  DiscoverPluginsResult,
+  GitHubApiError,
+  GitHubRateInfo,
+  GitHubSession,
+} from '@/types';
+
+/** 匿名主限流横幅：每个应用会话只弹出一次（组件卸载重挂不重复）。 */
+let primaryLimitBannerAcked = false;
+
+/** 内存缓存：组件卸载重挂仍可"查看缓存"（不落盘，不假称磁盘缓存）。 */
+interface DiscoveryCache {
+  page: number;
+  plugins: DiscoveredPlugin[];
+  totalCount: number;
+  rateLimit: GitHubRateInfo | null;
+}
+let discoveryCache: DiscoveryCache | null = null;
+
+/** 测试辅助：重置模块级横幅确认与内存缓存（仅测试使用）。 */
+export function __resetGitHubDiscoverySessionState() {
+  primaryLimitBannerAcked = false;
+  discoveryCache = null;
+}
+
+function isGitHubApiError(e: unknown): e is GitHubApiError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    'message' in e &&
+    typeof (e as GitHubApiError).code === 'string'
+  );
+}
+
+function toGitHubError(e: unknown): GitHubApiError {
+  if (isGitHubApiError(e)) return e;
+  return {
+    schemaVersion: '1.0.0',
+    code: 'NETWORK_ERROR',
+    message: e instanceof Error ? e.message : '未知错误',
+    retryAt: null,
+    action: 'NONE',
+    rateLimit: null,
+  };
+}
+
+function formatResetTime(epochMs: number | null): string | null {
+  if (epochMs == null) return null;
+  return new Date(epochMs).toLocaleTimeString('zh-CN');
+}
 
 interface GitHubPluginCardProps {
   plugin: DiscoveredPlugin;
   onInstall: (plugin: DiscoveredPlugin) => void;
   installing: Set<string>;
+  networkDisabled: boolean;
 }
 
 /** 按声明能力评估风险等级（high/medium/low） */
@@ -40,7 +92,7 @@ function getCapabilityRisk(manifest: DiscoveredPlugin['manifest']): { level: 'hi
   return { level, label, color, reasons };
 }
 
-function GitHubPluginCard({ plugin, onInstall, installing }: GitHubPluginCardProps) {
+function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: GitHubPluginCardProps) {
   const { repository, manifest, manifestError, isInstalled } = plugin;
   const isInstalling = installing.has(repository.fullName);
   const [expanded, setExpanded] = useState(false);
@@ -50,14 +102,14 @@ function GitHubPluginCard({ plugin, onInstall, installing }: GitHubPluginCardPro
   const risk = getCapabilityRisk(manifest);
 
   const handleInstallClick = () => {
-    if (!isInstalled && !isInstalling && manifest) {
+    if (!networkDisabled && !isInstalled && !isInstalling && manifest) {
       setConsentChecked(false);
       setShowConsent(true);
     }
   };
 
   const handleConfirmInstall = () => {
-    if (consentChecked) {
+    if (consentChecked && !networkDisabled) {
       setShowConsent(false);
       onInstall(plugin);
     }
@@ -151,7 +203,7 @@ function GitHubPluginCard({ plugin, onInstall, installing }: GitHubPluginCardPro
                 variant="primary"
                 size="sm"
                 onClick={handleInstallClick}
-                disabled={!manifest}
+                disabled={!manifest || networkDisabled}
               >
                 <Download className="mr-1 h-4 w-4" aria-hidden="true" />
                 安装
@@ -297,6 +349,7 @@ function GitHubPluginCard({ plugin, onInstall, installing }: GitHubPluginCardPro
           plugin={plugin}
           risk={risk}
           checked={consentChecked}
+          disabled={networkDisabled}
           onCheckedChange={setConsentChecked}
           onConfirm={handleConfirmInstall}
           onCancel={() => setShowConsent(false)}
@@ -310,12 +363,13 @@ interface InstallConsentModalProps {
   plugin: DiscoveredPlugin;
   risk: ReturnType<typeof getCapabilityRisk>;
   checked: boolean;
+  disabled: boolean;
   onCheckedChange: (v: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-function InstallConsentModal({ plugin, risk, checked, onCheckedChange, onConfirm, onCancel }: InstallConsentModalProps) {
+function InstallConsentModal({ plugin, risk, checked, disabled, onCheckedChange, onConfirm, onCancel }: InstallConsentModalProps) {
   const { repository, manifest } = plugin;
   return (
     <div
@@ -409,7 +463,7 @@ function InstallConsentModal({ plugin, risk, checked, onCheckedChange, onConfirm
             variant={risk.level === 'high' ? 'danger' : 'primary'}
             size="sm"
             onClick={onConfirm}
-            disabled={!checked}
+            disabled={!checked || disabled}
           >
             <Download className="mr-1 h-4 w-4" aria-hidden="true" />
             确认安装
@@ -420,79 +474,402 @@ function InstallConsentModal({ plugin, risk, checked, onCheckedChange, onConfirm
   );
 }
 
-export function GitHubPluginDiscovery() {
-  const [plugins, setPlugins] = useState<DiscoveredPlugin[]>([]);
-  const [installError, setInstallError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
-  const [rateLimitRemaining, setRateLimitRemaining] = useState<number | null>(null);
-  const [rateLimitReset, setRateLimitReset] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [githubToken, setGithubToken] = useState('');
-  const [showTokenInput, setShowTokenInput] = useState(false);
-  const [installing, setInstalling] = useState<Set<string>>(new Set());
+/** 配置 Token 面板：受控输入不触发联网；提交才调用 configure_github_token（后端 /user 验证）。 */
+interface TokenPanelProps {
+  submitting: boolean;
+  error: string | null;
+  networkDisabled: boolean;
+  onSubmit: (candidate: string, remember: boolean) => void;
+  onCancel: () => void;
+}
 
-  const loadPlugins = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel }: TokenPanelProps) {
+  const [candidate, setCandidate] = useState('');
+  const [remember, setRemember] = useState(false);
+
+  const handleSubmit = () => {
+    const trimmed = candidate.trim();
+    if (!trimmed || submitting || networkDisabled) return;
+    onSubmit(trimmed, remember);
+  };
+
+  return (
+    <Card className="rounded-2xl border-divider bg-default-50/50 p-4" role="form" aria-label="配置 GitHub Token">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start gap-2">
+          <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          <div className="text-xs text-default-500">
+            <p className="font-medium text-foreground">配置 GitHub Personal Access Token</p>
+            <p className="mt-1 leading-relaxed">
+              推荐使用 <strong>fine-grained token</strong>：仅需公共仓库只读权限，有效期建议 30–90 天。
+              若使用 classic token，<strong>无需勾选任何 scope</strong>（也不需要 public_repo）。
+              Token 由应用安全保管，不会出现在界面或日志中。
+            </p>
+          </div>
+        </div>
+        <Input
+          label="Personal Access Token"
+          placeholder="输入 token（输入时不会发送任何请求）"
+          type="password"
+          value={candidate}
+          onValueChange={setCandidate}
+          isInvalid={!!error}
+          errorMessage={error ?? undefined}
+          isDisabled={submitting}
+          autoComplete="off"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+        />
+        <Checkbox
+          checked={remember}
+          onCheckedChange={setRemember}
+          isDisabled={submitting}
+          aria-label="记住此 token"
+          labelClassName="text-xs"
+        >
+          记住此 token（写入系统凭据库）。不勾选时仅保存在内存，退出应用后失效。
+        </Checkbox>
+        {networkDisabled && (
+          <p className="text-xs text-warning" role="status">
+            请求已暂停，等待限制解除后才能验证 Token。
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
+            取消
+          </Button>
+          <Button size="sm" onClick={handleSubmit} disabled={submitting || networkDisabled || candidate.trim() === ''}>
+            {submitting ? (
+              <>
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden="true" />
+                验证中...
+              </>
+            ) : (
+              '验证并保存'
+            )}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+type PendingRetry =
+  | { kind: 'search'; page: number }
+  | { kind: 'install'; plugin: DiscoveredPlugin };
+
+interface RequestBlock {
+  retryAt: number | null;
+  /** 已确认且未混入其他冷却的主限流；提交时另行确认实际请求身份为匿名。 */
+  allowCandidate: boolean;
+}
+
+function isRateLimitError(error: GitHubApiError): boolean {
+  return ['PRIMARY_RATE_LIMIT', 'SECONDARY_RATE_LIMIT', 'RATE_LIMIT_UNKNOWN', 'RATE_WAIT'].includes(error.code);
+}
+
+export function GitHubPluginDiscovery() {
+  const [plugins, setPlugins] = useState<DiscoveredPlugin[]>(discoveryCache?.plugins ?? []);
+  const [viewingCache, setViewingCache] = useState(false);
+  const [installError, setInstallError] = useState<GitHubApiError | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(discoveryCache?.page ?? 1);
+  const [totalCount, setTotalCount] = useState(discoveryCache?.totalCount ?? 0);
+  const [rateLimit, setRateLimit] = useState<GitHubRateInfo | null>(discoveryCache?.rateLimit ?? null);
+  const [session, setSession] = useState<GitHubSession | null>(null);
+  const [error, setError] = useState<GitHubApiError | null>(null);
+  const [showTokenPanel, setShowTokenPanel] = useState(false);
+  const [tokenSubmitting, setTokenSubmitting] = useState(false);
+  const [tokenClearing, setTokenClearing] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<Set<string>>(new Set());
+  const [showLimitBanner, setShowLimitBanner] = useState(false);
+  const [requestBlock, setRequestBlock] = useState<RequestBlock | null>(null);
+
+  const mountedRef = useRef(true);
+  const initialPageRef = useRef(page);
+  const generationRef = useRef(0);
+  const requestSeqRef = useRef(0);
+  const sessionRequestSeqRef = useRef(0);
+  const inFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const pendingRetryRef = useRef<PendingRetry | null>(null);
+  const credentialMutationRef = useRef(false);
+  const sessionRef = useRef<GitHubSession | null>(null);
+  const requestBlockRef = useRef<RequestBlock | null>(null);
+  const installingRef = useRef(new Set<string>());
+  // 本次会话确认安装的结果优先于可能更早拍摄的远端/本地发现快照。
+  const installedPathsRef = useRef(new Map<string, string>(
+    (discoveryCache?.plugins ?? []).flatMap((plugin) =>
+      plugin.isInstalled && plugin.localPath ? [[plugin.repository.fullName, plugin.localPath]] : [],
+    ),
+  ));
+
+  const updateRequestBlock = useCallback((block: RequestBlock | null) => {
+    requestBlockRef.current = block;
+    setRequestBlock(block);
+  }, []);
+
+  const isRequestBlocked = useCallback(() => {
+    const block = requestBlockRef.current;
+    return block != null && (block.retryAt == null || block.retryAt > Date.now());
+  }, []);
+
+  const canValidateCandidate = () => {
+    return !isRequestBlocked() || (
+      requestBlockRef.current?.allowCandidate === true &&
+      (sessionRef.current?.identity === 'ANONYMOUS' || sessionRef.current?.identity === 'TOKEN_INVALID')
+    );
+  };
+
+  const invalidateCredentialRequests = useCallback(() => {
+    generationRef.current += 1;
+    sessionRequestSeqRef.current += 1;
+    requestSeqRef.current += 1;
+    inFlightRef.current = null;
+    setLoading(false);
+  }, []);
+
+  const applySession = useCallback((next: GitHubSession) => {
+    sessionRef.current = next;
+    setSession(next);
+    if (next.identity === 'TOKEN_INVALID') setShowTokenPanel(true);
+  }, []);
+
+  const refreshSession = useCallback(async (generation = generationRef.current, failedOperation?: PendingRetry) => {
+    if (generation !== generationRef.current) return;
+    const seq = ++sessionRequestSeqRef.current;
     try {
-      const result: DiscoverPluginsResult = await api.discoverGitHubPlugins(page, 20, githubToken || undefined);
-      setPlugins(result.plugins);
-      setTotalCount(result.totalCount);
-      setRateLimitRemaining(result.rateLimitRemaining);
-      setRateLimitReset(result.rateLimitReset);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
+      const next = await api.getGitHubSession();
+      if (!mountedRef.current || generation !== generationRef.current || seq !== sessionRequestSeqRef.current) return;
+      if (sessionRef.current && sessionRef.current.identity !== next.identity) {
+        // 后端 401 撤销凭据也是一次身份变更，旧身份的并发结果不再适用。
+        invalidateCredentialRequests();
+      }
+      applySession(next);
+      if (next.identity === 'TOKEN_INVALID' && failedOperation) {
+        pendingRetryRef.current = failedOperation;
+      }
+    } catch {
+      // 查询失败不阻塞浏览；不允许旧查询覆盖更新的会话。
     }
-  }, [page, githubToken]);
+  }, [applySession, invalidateCredentialRequests]);
+
+  const recordFailure = useCallback((apiError: GitHubApiError, operation?: PendingRetry, candidateValidation = false) => {
+    if (apiError.rateLimit) setRateLimit(apiError.rateLimit);
+    const primaryLimit = !candidateValidation && apiError.code === 'PRIMARY_RATE_LIMIT';
+    const anonymousPrimary = primaryLimit &&
+      (sessionRef.current?.identity === 'ANONYMOUS' || sessionRef.current?.identity === 'TOKEN_INVALID');
+    if (isRateLimitError(apiError) || (apiError.retryAt != null && apiError.retryAt > Date.now())) {
+      const previous = isRequestBlocked() ? requestBlockRef.current : null;
+      // 并行错误不能缩短等待，也不能把 secondary/unknown 停止状态变成可绕过的主限流。
+      updateRequestBlock({
+        retryAt: previous
+          ? previous.retryAt == null || apiError.retryAt == null ? null : Math.max(previous.retryAt, apiError.retryAt)
+          : apiError.retryAt,
+        // Eligibility is primary-only evidence; the current identity is checked when
+        // submitting, including TOKEN_INVALID which sends requests anonymously.
+        allowCandidate: primaryLimit && (previous?.allowCandidate ?? true),
+      });
+    }
+    if (operation && (anonymousPrimary || apiError.code === 'AUTH_INVALID')) {
+      pendingRetryRef.current = operation;
+    }
+    if (apiError.code === 'AUTH_INVALID') setShowTokenPanel(true);
+    if (anonymousPrimary && !primaryLimitBannerAcked) {
+      primaryLimitBannerAcked = true;
+      setShowLimitBanner(true);
+    }
+  }, [isRequestBlocked, updateRequestBlock]);
+
+  const applyResult = useCallback((targetPage: number, result: DiscoverPluginsResult) => {
+    const merged = result.plugins.map((plugin) => {
+      const path = installedPathsRef.current.get(plugin.repository.fullName);
+      return path ? { ...plugin, isInstalled: true, localPath: path } : plugin;
+    });
+    setPlugins(merged);
+    setTotalCount(result.totalCount);
+    setRateLimit(result.rateLimit);
+    setViewingCache(false);
+    discoveryCache = { page: targetPage, plugins: merged, totalCount: result.totalCount, rateLimit: result.rateLimit };
+  }, []);
+
+  const loadPlugins = useCallback(async (targetPage: number) => {
+    if (isRequestBlocked() || credentialMutationRef.current) return;
+    const generation = generationRef.current;
+    // StrictMode 同代次去重；新凭据永远不能复用旧匿名 Promise。
+    const key = `discover:${generation}:${targetPage}`;
+    if (inFlightRef.current?.key === key) return inFlightRef.current.promise;
+    const seq = ++requestSeqRef.current;
+    const promise = (async () => {
+      setPage(targetPage);
+      setViewingCache(false);
+      setLoading(true);
+      setError(null);
+      let failedOperation: PendingRetry | undefined;
+      try {
+        const result = await api.discoverGitHubPlugins(targetPage, 20);
+        if (!mountedRef.current || generation !== generationRef.current || seq !== requestSeqRef.current) return;
+        applyResult(targetPage, result);
+      } catch (e) {
+        if (!mountedRef.current || generation !== generationRef.current || seq !== requestSeqRef.current) return;
+        const apiError = toGitHubError(e);
+        failedOperation = { kind: 'search', page: targetPage };
+        setError(apiError);
+        recordFailure(apiError, failedOperation);
+      } finally {
+        if (inFlightRef.current?.key === key) inFlightRef.current = null;
+        if (mountedRef.current && generation === generationRef.current && seq === requestSeqRef.current) {
+          setLoading(false);
+          void refreshSession(generation, failedOperation);
+        }
+      }
+    })();
+    inFlightRef.current = { key, promise };
+    return promise;
+  }, [applyResult, isRequestBlocked, recordFailure, refreshSession]);
 
   useEffect(() => {
-    loadPlugins();
-  }, [loadPlugins]);
+    mountedRef.current = true;
+    localStorage.removeItem('github_token'); // 只删除、不迁移、不发送旧凭据。
+    let disposed = false;
+    // 先确认身份，再决定是否可以提供匿名主限流恢复。
+    const generation = generationRef.current;
+    void refreshSession(generation).then(() => {
+      if (!disposed && generation === generationRef.current) void loadPlugins(initialPageRef.current);
+    });
+    return () => {
+      disposed = true;
+      mountedRef.current = false;
+      sessionRequestSeqRef.current += 1;
+    };
+  }, [loadPlugins, refreshSession]);
 
-  const handleInstall = async (plugin: DiscoveredPlugin) => {
-    const newInstalling = new Set(installing);
-    newInstalling.add(plugin.repository.fullName);
-    setInstalling(newInstalling);
+  useEffect(() => {
+    if (requestBlock?.retryAt == null) return; // 没有可靠等待时间时保持停止，不猜测配额/重试时间。
+    const timer = setTimeout(() => updateRequestBlock(null), Math.max(0, requestBlock.retryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [requestBlock, updateRequestBlock]);
 
+  const handleInstall = async (plugin: DiscoveredPlugin, retry = false) => {
+    const name = plugin.repository.fullName;
+    if (isRequestBlocked() || credentialMutationRef.current || installingRef.current.has(name) || installedPathsRef.current.has(name)) return;
+    const generation = generationRef.current;
+    installingRef.current.add(name);
+    setInstalling(new Set(installingRef.current));
+    let failedOperation: PendingRetry | undefined;
     try {
       const result = await api.installGitHubPlugin({
         owner: plugin.repository.owner.login,
         repo: plugin.repository.name,
         branch: plugin.repository.defaultBranch,
-        githubToken: githubToken || undefined,
       });
-      // 更新本地状态标记为已安装
-      setPlugins((prev) =>
-        prev.map((p) =>
-          p.repository.fullName === plugin.repository.fullName
-            ? { ...p, isInstalled: true, localPath: result }
-            : p
-        )
+      if (!mountedRef.current) return;
+      // 安装的本地副作用即使跨身份发生也必须保留。
+      installedPathsRef.current.set(name, result);
+      const merge = (items: DiscoveredPlugin[]) => items.map((item) =>
+        item.repository.fullName === name ? { ...item, isInstalled: true, localPath: result } : item,
       );
-      setInstallError(null);
+      setPlugins(merge);
+      if (discoveryCache) discoveryCache = { ...discoveryCache, plugins: merge(discoveryCache.plugins) };
+      if (generation === generationRef.current) setInstallError(null);
     } catch (e) {
-      setInstallError(e instanceof Error ? e.message : String(e));
+      if (!mountedRef.current || generation !== generationRef.current) return;
+      const apiError = toGitHubError(e);
+      failedOperation = retry ? undefined : { kind: 'install', plugin };
+      setInstallError(apiError);
+      recordFailure(apiError, failedOperation);
     } finally {
-      const newInstalling = new Set(installing);
-      newInstalling.delete(plugin.repository.fullName);
-      setInstalling(newInstalling);
+      installingRef.current.delete(name);
+      if (mountedRef.current) {
+        setInstalling(new Set(installingRef.current));
+        void refreshSession(generation, failedOperation);
+      }
     }
   };
 
-  const handleTokenSave = () => {
-    localStorage.setItem('github_token', githubToken);
-    loadPlugins();
+  const handleTokenSubmit = async (candidate: string, remember: boolean) => {
+    // 同步防双击，不使用会静默吞掉修正后提交的任意时长冷却。
+    if (credentialMutationRef.current || !canValidateCandidate()) return;
+    credentialMutationRef.current = true;
+    sessionRequestSeqRef.current += 1;
+    setTokenSubmitting(true);
+    setTokenError(null);
+    try {
+      const next = await api.configureGitHubToken(candidate, remember);
+      if (!mountedRef.current) return;
+      invalidateCredentialRequests();
+      applySession(next);
+      setRateLimit(next.rateLimit);
+      setShowTokenPanel(false);
+      setShowLimitBanner(false);
+      setError(null);
+      setInstallError(null);
+      if (requestBlockRef.current?.allowCandidate) updateRequestBlock(null);
+      const pending = pendingRetryRef.current;
+      pendingRetryRef.current = null; // 消费原上下文，重试失败不重新武装安装。
+      credentialMutationRef.current = false;
+      if (pending?.kind === 'install') {
+        void handleInstall(pending.plugin, true);
+      } else {
+        void loadPlugins(pending?.page ?? page);
+      }
+    } catch (e) {
+      if (!mountedRef.current) return;
+      const apiError = toGitHubError(e);
+      setTokenError(apiError.message);
+      recordFailure(apiError, undefined, true);
+    } finally {
+      credentialMutationRef.current = false;
+      if (mountedRef.current) setTokenSubmitting(false);
+    }
   };
 
-  // 启动时恢复 token
-  useEffect(() => {
-    const saved = localStorage.getItem('github_token');
-    if (saved) setGithubToken(saved);
-  }, []);
+  const handleTokenPanelCancel = () => {
+    setShowTokenPanel(false);
+    setTokenError(null);
+    pendingRetryRef.current = null;
+  };
+
+  const handleClearToken = async () => {
+    if (credentialMutationRef.current) return;
+    credentialMutationRef.current = true;
+    sessionRequestSeqRef.current += 1;
+    setTokenClearing(true);
+    try {
+      const next = await api.clearGitHubToken();
+      if (!mountedRef.current) return;
+      invalidateCredentialRequests();
+      applySession(next);
+      pendingRetryRef.current = null;
+      credentialMutationRef.current = false;
+      // 清除凭据不是限流旁路；若当前可联网则用新代次刷新。
+      void loadPlugins(page);
+    } catch (e) {
+      if (mountedRef.current) setTokenError(toGitHubError(e).message);
+    } finally {
+      credentialMutationRef.current = false;
+      if (mountedRef.current) setTokenClearing(false);
+    }
+  };
+
+  const handleRefresh = () => { void loadPlugins(page); };
+  const handlePageChange = (targetPage: number) => {
+    if (loading || viewingCache || isRequestBlocked() || credentialMutationRef.current) return;
+    void loadPlugins(targetPage);
+  };
+
+  const identity = session?.identity ?? 'ANONYMOUS';
+  const isAnonymous = identity === 'ANONYMOUS';
+  const softQuotaWarning = isAnonymous && rateLimit?.remaining != null && rateLimit.remaining < 10;
+  const searchRateLimited = error != null && isRateLimitError(error);
+  const networkDisabled = isRequestBlocked() || tokenSubmitting || tokenClearing;
+  const refreshDisabled = loading || networkDisabled;
+  const tokenValidationDisabled = tokenClearing || !canValidateCandidate();
+  const retryBlockedUntil = requestBlock?.retryAt ?? null;
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto px-8 pb-8 pt-6">
@@ -504,6 +881,18 @@ export function GitHubPluginDiscovery() {
             <Badge className="border border-primary/40 bg-primary/10 text-primary">
               GitHub (topic: time-pin-plugins)
             </Badge>
+            <Badge
+              className={cn(
+                'text-xs',
+                identity === 'AUTHENTICATED' && 'border border-success/40 bg-success/10 text-success',
+                identity === 'ANONYMOUS' && 'border border-divider bg-background text-default-500',
+                identity === 'TOKEN_INVALID' && 'border border-danger/40 bg-danger/10 text-danger'
+              )}
+            >
+              {identity === 'AUTHENTICATED' && '已认证'}
+              {identity === 'ANONYMOUS' && '匿名'}
+              {identity === 'TOKEN_INVALID' && 'Token 已失效'}
+            </Badge>
           </div>
           <p className="mt-1.5 text-sm text-default-500">
             搜索带有 <code className="rounded border border-divider bg-background px-1 font-mono">time-pin-plugins</code> 标签的 GitHub 仓库，
@@ -511,68 +900,237 @@ export function GitHubPluginDiscovery() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {showTokenInput ? (
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="GitHub Personal Access Token (可选，提高速率限制)"
-                type="password"
-                value={githubToken}
-                onChange={(e) => setGithubToken(e.target.value)}
-                className="w-64"
-              />
-              <Button size="sm" onClick={handleTokenSave}>
-                <CheckCircle className="mr-1 h-4 w-4" />
-                保存
-              </Button>
-              <Button variant="ghost" size="icon" onClick={() => setShowTokenInput(false)}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+          {identity === 'AUTHENTICATED' ? (
+            <Button variant="secondary" size="sm" onClick={handleClearToken} disabled={tokenSubmitting || tokenClearing}>
+              <KeyRound className="mr-1 h-4 w-4" aria-hidden="true" />
+              清除 Token
+            </Button>
           ) : (
-            <Button variant="secondary" size="sm" onClick={() => setShowTokenInput(true)}>
-              <Info className="mr-1 h-4 w-4" />
-              设置 Token
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setTokenError(null);
+                setShowTokenPanel((v) => !v);
+              }}
+            >
+              <KeyRound className="mr-1 h-4 w-4" aria-hidden="true" />
+              {identity === 'TOKEN_INVALID' ? '重新配置 Token' : '配置 Token'}
             </Button>
           )}
-          <Button variant="secondary" onClick={loadPlugins} disabled={loading}>
+          <Button
+            variant="secondary"
+            onClick={handleRefresh}
+            disabled={refreshDisabled}
+            aria-label={retryBlockedUntil != null ? `请求受限，约 ${formatResetTime(retryBlockedUntil) ?? ''} 后可重试` : '刷新'}
+          >
             <Loader2 className={cn('h-4 w-4', loading && 'animate-spin')} aria-hidden="true" />
             刷新
           </Button>
         </div>
       </div>
 
-      {/* 速率限制提示 */}
-      {rateLimitRemaining !== null && (
+      {/* Token 配置面板（渐进披露） */}
+      {showTokenPanel && (
+        <TokenPanel
+          submitting={tokenSubmitting}
+          error={tokenError}
+          networkDisabled={tokenValidationDisabled}
+          onSubmit={handleTokenSubmit}
+          onCancel={handleTokenPanelCancel}
+        />
+      )}
+      {session?.storageWarning && (
+        <p className="text-xs text-warning" role="status">
+          凭据存储警告：{session.storageWarning}
+        </p>
+      )}
+      {!showTokenPanel && tokenError && <p className="text-xs text-danger" role="alert">{tokenError}</p>}
+      {isRequestBlocked() && (
+        <p className="text-xs text-warning" role="status">
+          请求已暂停。{retryBlockedUntil != null
+            ? `请等待至 ${formatResetTime(retryBlockedUntil)} 后手动重试。`
+            : '服务未提供可靠的恢复时间。请按错误提示操作；若本次会话已停止，请稍后重启应用。'}
+        </p>
+      )}
+
+      {/* 匿名主限流：会话单次横幅（含校准后的 reset 时间） */}
+      {showLimitBanner && (
+        <Card className="rounded-2xl border-warning/30 bg-warning/10 p-4" role="alert" aria-label="GitHub API 已达上限">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
+            <div className="min-w-0 flex-1 text-sm text-warning">
+              <p className="font-medium">GitHub API 请求次数已达上限</p>
+              <p className="mt-1 text-xs">
+                {rateLimit?.resetAt != null
+                  ? `预计 ${formatResetTime(rateLimit.resetAt)} 后重置。`
+                  : '请稍后重试。'}
+                你可以配置 Token 提高限额、稍后等解禁后手动刷新，或查看当前会话中已加载的缓存结果。
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setShowTokenPanel(true);
+                    setShowLimitBanner(false);
+                    primaryLimitBannerAcked = true;
+                  }}
+                >
+                  配置 Token
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowLimitBanner(false);
+                    primaryLimitBannerAcked = true;
+                  }}
+                >
+                  稍后
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={discoveryCache == null}
+                  onClick={() => {
+                    setShowLimitBanner(false);
+                    primaryLimitBannerAcked = true;
+                    if (discoveryCache) {
+                      setPlugins(discoveryCache.plugins);
+                      setTotalCount(discoveryCache.totalCount);
+                      setPage(discoveryCache.page);
+                      setViewingCache(true);
+                    }
+                  }}
+                >
+                  查看缓存
+                </Button>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="关闭限流提示"
+              onClick={() => {
+                setShowLimitBanner(false);
+                primaryLimitBannerAcked = true;
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* 速率限制信息（仅展示响应头数据，不硬编码配额口径） */}
+      {rateLimit && (rateLimit.remaining != null || rateLimit.resetAt != null) && (
         <div className="flex items-center gap-2 text-xs text-default-500">
           <Info className="h-3 w-3" aria-hidden="true" />
-          <span>API 剩余调用: {rateLimitRemaining}</span>
-          {rateLimitReset && (
+          {rateLimit.remaining != null && <span>API 剩余调用: {rateLimit.remaining}</span>}
+          {rateLimit.resetAt != null && (
             <>
               <span>·</span>
-              <span>重置于: {new Date(rateLimitReset * 1000).toLocaleTimeString('zh-CN')}</span>
+              <span>重置于: {formatResetTime(rateLimit.resetAt)}</span>
             </>
           )}
-          <span>·</span>
-          <span>未登录仅 60 次/小时，配置 Token 可提升到 5000 次/小时</span>
+          {isAnonymous && (
+            <>
+              <span>·</span>
+              <span>匿名访问限额较低，配置 Token 可提升</span>
+            </>
+          )}
         </div>
+      )}
+
+      {/* 匿名低剩余量软警告 */}
+      {softQuotaWarning && !searchRateLimited && (
+        <div className="flex items-center gap-2 text-xs text-warning" role="status">
+          <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+          <span>匿名 API 额度即将用尽（剩余 {rateLimit?.remaining}），建议配置 Token。</span>
+        </div>
+      )}
+
+      {/* Token 失效引导（含匿名回退成功的场景） */}
+      {identity === 'TOKEN_INVALID' && (
+        <Card className="rounded-2xl border-warning/30 bg-warning/10 p-4" role="alert" aria-label="Token 已失效">
+          <div className="flex items-center gap-2 text-warning">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="text-sm">
+              已保存的 GitHub Token 已失效（当前按匿名访问）。
+              <button
+                type="button"
+                className="ml-1 underline underline-offset-2"
+                onClick={() => setShowTokenPanel(true)}
+              >
+                重新配置 Token
+              </button>
+            </span>
+          </div>
+        </Card>
       )}
 
       {/* 错误提示 */}
       {error && (
-        <Card className="rounded-2xl border-danger/30 bg-danger/10 p-4">
-          <div className="flex items-center gap-2 text-danger">
-            <AlertCircle className="h-4 w-4" aria-hidden="true" />
-            <span className="text-sm">{error}</span>
+        <Card className="rounded-2xl border-danger/30 bg-danger/10 p-4" role="alert" aria-label="搜索失败">
+          <div className="flex items-start gap-2 text-danger">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <span className="text-sm">{error.message}</span>
+              {error.code === 'NOT_FOUND_OR_PRIVATE' && (
+                <p className="mt-1 text-xs">
+                  仓库不存在或无权访问。若为私有仓库，可
+                  <button
+                    type="button"
+                    className="mx-1 underline underline-offset-2"
+                    onClick={() => setShowTokenPanel(true)}
+                  >
+                    配置 Token
+                  </button>
+                  后重试。
+                </p>
+              )}
+              {(error.code === 'SECONDARY_RATE_LIMIT' || error.code === 'RATE_LIMIT_UNKNOWN' || error.code === 'RATE_WAIT') && (
+                <p className="mt-1 text-xs">
+                  请求被暂时限制，请等待{formatResetTime(error.retryAt) ? `至 ${formatResetTime(error.retryAt)} ` : '片刻'}后重试。
+                </p>
+              )}
+              {error.code === 'AUTH_INVALID' && (
+                <p className="mt-1 text-xs">
+                  Token 验证失败，请
+                  <button
+                    type="button"
+                    className="mx-1 underline underline-offset-2"
+                    onClick={() => setShowTokenPanel(true)}
+                  >
+                    重新配置 Token
+                  </button>
+                  。
+                </p>
+              )}
+            </div>
           </div>
         </Card>
       )}
       {installError && (
-        <Card className="rounded-2xl border-danger/30 bg-danger/10 p-4">
-          <div className="flex items-center gap-2 text-danger">
-            <AlertCircle className="h-4 w-4" aria-hidden="true" />
-            <span className="text-sm">安装失败: {installError}</span>
+        <Card className="rounded-2xl border-danger/30 bg-danger/10 p-4" role="alert" aria-label="安装失败">
+          <div className="flex items-start gap-2 text-danger">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <span className="text-sm">安装失败: {installError.message}</span>
+              {installError.code === 'NOT_FOUND_OR_PRIVATE' && (
+                <p className="mt-1 text-xs">仓库不存在或无权访问；若为私有仓库可配置 Token 后重试。</p>
+              )}
+            </div>
           </div>
         </Card>
+      )}
+
+      {/* 查看缓存提示 */}
+      {viewingCache && (
+        <div className="flex items-center gap-2 text-xs text-default-500" role="status">
+          <Info className="h-3 w-3" aria-hidden="true" />
+          <span>正在显示本次会话已加载的结果（内存缓存，未落盘）。点击「刷新」可在限额恢复后重新获取。</span>
+        </div>
       )}
 
       {/* 插件列表 */}
@@ -600,6 +1158,7 @@ export function GitHubPluginDiscovery() {
               key={plugin.repository.fullName}
               plugin={plugin}
               onInstall={handleInstall}
+              networkDisabled={networkDisabled}
               installing={installing}
             />
           ))
@@ -611,8 +1170,8 @@ export function GitHubPluginDiscovery() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1 || loading}
+              onClick={() => handlePageChange(Math.max(1, page - 1))}
+              disabled={page <= 1 || loading || networkDisabled || viewingCache}
             >
               上一页
             </Button>
@@ -622,8 +1181,8 @@ export function GitHubPluginDiscovery() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setPage((p) => p + 1)}
-              disabled={page * 20 >= totalCount || loading}
+              onClick={() => handlePageChange(page + 1)}
+              disabled={page * 20 >= totalCount || loading || networkDisabled || viewingCache}
             >
               下一页
             </Button>

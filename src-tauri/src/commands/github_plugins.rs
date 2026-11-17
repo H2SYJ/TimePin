@@ -3,16 +3,30 @@
 //! 安全说明：发现的插件均未经过 TimePin 官方验证。安装时会下载整个仓库 ZIP 并解压到插件目录，
 //! 解压过程会过滤 `..` 与绝对路径，manifest 使用与本地插件相同的 PluginManifest::validate() 校验。
 
+use crate::core::github::{
+    api_url, ErrorCode, GitHubApiError, GitHubClient, GitHubRateInfo, GitHubResponse, GitHubSession,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
-use tauri::{command, Emitter};
+use tauri::{command, Emitter, State};
 use zip::ZipArchive;
-
-const GITHUB_API_BASE: &str = "https://api.github.com";
 const SEARCH_QUERY: &str = "topic:time-pin-plugins";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy)]
+struct ExtractionLimits {
+    entries: usize,
+    entry_bytes: u64,
+    total_bytes: u64,
+}
+const EXTRACTION_LIMITS: ExtractionLimits = ExtractionLimits {
+    entries: 10_000,
+    entry_bytes: 128 * 1024 * 1024,
+    total_bytes: 512 * 1024 * 1024,
+};
+
+/// IPC models use camelCase; GitHub's wire models below deliberately do not.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemotePlugin {
     pub name: String,
@@ -29,7 +43,7 @@ pub struct RemotePlugin {
     pub default_branch: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryOwner {
     pub login: String,
@@ -37,11 +51,57 @@ pub struct RepositoryOwner {
     pub html_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitHubSearchResponse {
-    pub total_count: u32,
-    pub items: Vec<RemotePlugin>,
+#[derive(Deserialize)]
+struct ApiRepository {
+    name: String,
+    full_name: String,
+    description: Option<String>,
+    html_url: String,
+    clone_url: String,
+    stargazers_count: u32,
+    forks_count: u32,
+    updated_at: String,
+    language: Option<String>,
+    #[serde(default)]
+    topics: Vec<String>,
+    owner: ApiOwner,
+    default_branch: String,
+}
+
+#[derive(Deserialize)]
+struct ApiOwner {
+    login: String,
+    avatar_url: String,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubSearchResponse {
+    total_count: u32,
+    items: Vec<ApiRepository>,
+}
+
+impl From<ApiRepository> for RemotePlugin {
+    fn from(repo: ApiRepository) -> Self {
+        Self {
+            name: repo.name,
+            full_name: repo.full_name,
+            description: repo.description,
+            html_url: repo.html_url,
+            clone_url: repo.clone_url,
+            stargazers_count: repo.stargazers_count,
+            forks_count: repo.forks_count,
+            updated_at: repo.updated_at,
+            language: repo.language,
+            topics: repo.topics,
+            owner: RepositoryOwner {
+                login: repo.owner.login,
+                avatar_url: repo.owner.avatar_url,
+                html_url: repo.owner.html_url,
+            },
+            default_branch: repo.default_branch,
+        }
+    }
 }
 
 /// 供 IPC 返回的 manifest（与 plugins::manifest::PluginManifest 字段保持一致）
@@ -116,7 +176,7 @@ impl PluginManifest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredPlugin {
     pub repository: RemotePlugin,
@@ -128,123 +188,143 @@ pub struct DiscoveredPlugin {
     pub verification: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoverPluginsResult {
+    pub schema_version: &'static str,
     pub plugins: Vec<DiscoveredPlugin>,
     pub total_count: u32,
-    pub rate_limit_remaining: Option<u32>,
-    pub rate_limit_reset: Option<u64>,
+    pub rate_limit: Option<GitHubRateInfo>,
 }
 
-/// 单个下载内容文件的 JSON 结构
 #[derive(Deserialize)]
 struct FileContent {
     content: String,
     encoding: String,
 }
 
-async fn fetch_github_api(url: &str, token: Option<&str>) -> Result<reqwest::Response, String> {
-    let client = reqwest::Client::new();
-    let mut request = client
-        .get(url)
-        .header("User-Agent", "TimePin/0.1.0")
-        .header("Accept", "application/vnd.github+json");
-
-    if let Some(token) = token {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    request.send().await.map_err(|e| format!("请求失败: {e}"))
-}
-
-async fn get_rate_limit_headers(response: &reqwest::Response) -> (Option<u32>, Option<u64>) {
-    let remaining = response
-        .headers()
-        .get("x-ratelimit-remaining")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok());
-
-    let reset = response
-        .headers()
-        .get("x-ratelimit-reset")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok());
-
-    (remaining, reset)
+fn parse_response<T: serde::de::DeserializeOwned>(
+    response: &GitHubResponse,
+    context: &str,
+) -> Result<T, GitHubApiError> {
+    serde_json::from_slice(&response.body).map_err(|_| {
+        let mut error = GitHubApiError::client(format!("{context}响应格式不正确"));
+        error.rate_limit = response.rate_limit.clone().map(Box::new);
+        error
+    })
 }
 
 async fn search_repositories(
+    client: &GitHubClient,
     page: u32,
     per_page: u32,
-    token: Option<&str>,
-) -> Result<(Vec<RemotePlugin>, u32, Option<u32>, Option<u64>), String> {
-    let url = format!(
-        "{GITHUB_API_BASE}/search/repositories?q={}&sort=updated&order=desc&page={}&per_page={}",
-        urlencoding::encode(SEARCH_QUERY),
-        page,
-        per_page
-    );
-
-    let response = fetch_github_api(&url, token).await?;
-    let (rate_limit_remaining, rate_limit_reset) = get_rate_limit_headers(&response).await;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("GitHub API 错误: {error_text}"));
-    }
-
-    let search_response: GitHubSearchResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("解析响应失败: {e}"))?;
-
+) -> Result<(Vec<RemotePlugin>, u32, Option<GitHubRateInfo>), GitHubApiError> {
+    let url = api_url(
+        &["search", "repositories"],
+        &[
+            ("q", SEARCH_QUERY),
+            ("sort", "updated"),
+            ("order", "desc"),
+            ("page", &page.to_string()),
+            ("per_page", &per_page.to_string()),
+        ],
+    )?;
+    let response = client.public_get(url).await?;
+    let search: GitHubSearchResponse = parse_response(&response, "GitHub 搜索")?;
     Ok((
-        search_response.items,
-        search_response.total_count,
-        rate_limit_remaining,
-        rate_limit_reset,
+        search.items.into_iter().map(RemotePlugin::from).collect(),
+        search.total_count,
+        response.rate_limit,
     ))
 }
 
 async fn fetch_plugin_manifest(
+    client: &GitHubClient,
     owner: &str,
     repo: &str,
     branch: &str,
-    token: Option<&str>,
-) -> Result<Option<PluginManifest>, String> {
-    let url = format!("{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/plugin.json?ref={branch}");
+) -> Result<(Option<PluginManifest>, Option<GitHubRateInfo>), GitHubApiError> {
+    validate_repository(owner, repo)?;
+    let url = api_url(
+        &["repos", owner, repo, "contents", "plugin.json"],
+        &[("ref", branch)],
+    )?;
+    let response = match client.public_get(url).await {
+        Ok(response) => response,
+        Err(error) if error.code == ErrorCode::NotFoundOrPrivate => {
+            return Ok((None, error.rate_limit.map(|rate| *rate)))
+        }
+        Err(error) => return Err(error),
+    };
+    let file: FileContent = parse_response(&response, "GitHub 文件")?;
+    let parse = || -> Result<PluginManifest, String> {
+        if file.encoding != "base64" {
+            return Err("plugin.json 编码不是 base64".into());
+        }
+        // GitHub inserts line breaks into base64 contents responses.
+        let compact: String = file
+            .content
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect();
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, compact)
+            .map_err(|_| "plugin.json Base64 内容无效".to_owned())?;
+        let text = String::from_utf8(decoded).map_err(|_| "plugin.json 不是 UTF-8".to_owned())?;
+        PluginManifest::parse(&text)
+    };
+    parse()
+        .map(|manifest| (Some(manifest), response.rate_limit.clone()))
+        .map_err(|message| {
+            let mut error = GitHubApiError::client(message);
+            error.rate_limit = response.rate_limit.map(Box::new);
+            error
+        })
+}
 
-    let response = fetch_github_api(&url, token).await?;
-
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+fn validate_repository(owner: &str, repo: &str) -> Result<(), GitHubApiError> {
+    if owner.is_empty()
+        || !owner
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        || repo.is_empty()
+        || matches!(repo, "." | "..")
+        || !repo
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+    {
+        return Err(GitHubApiError::client("GitHub owner/repo 参数不合法"));
     }
+    Ok(())
+}
 
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("获取 plugin.json 失败: {error_text}"));
-    }
+#[command]
+pub async fn get_github_session(
+    client: State<'_, GitHubClient>,
+) -> Result<GitHubSession, GitHubApiError> {
+    Ok(client.session().await)
+}
 
-    let file: FileContent = response
-        .json()
-        .await
-        .map_err(|e| format!("解析文件内容失败: {e}"))?;
+#[command(rename_all = "camelCase")]
+pub async fn configure_github_token(
+    client: State<'_, GitHubClient>,
+    candidate: String,
+    remember: bool,
+) -> Result<GitHubSession, GitHubApiError> {
+    client.configure_token(candidate, remember).await
+}
 
-    if file.encoding != "base64" {
-        return Err("plugin.json 编码不是 base64".to_string());
-    }
-
-    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &file.content)
-        .map_err(|e| format!("Base64 解码失败: {e}"))?;
-
-    let content_str = String::from_utf8(decoded).map_err(|e| format!("UTF-8 解码失败: {e}"))?;
-
-    PluginManifest::parse(&content_str).map(Some)
+#[command]
+pub async fn clear_github_token(
+    client: State<'_, GitHubClient>,
+) -> Result<GitHubSession, GitHubApiError> {
+    Ok(client.clear_token().await)
 }
 
 /// 检查本地插件目录中是否已安装同名插件（按 manifest.name 目录名）
 fn find_local_install(manifest_name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if !safe_plugin_name(manifest_name) {
+        return None;
+    }
     for dir in dirs {
         let candidate = dir.join(manifest_name);
         if candidate.is_dir() {
@@ -254,221 +334,266 @@ fn find_local_install(manifest_name: &str, dirs: &[PathBuf]) -> Option<PathBuf> 
     None
 }
 
-#[command]
+#[command(rename_all = "camelCase")]
 pub async fn discover_github_plugins(
     app_handle: tauri::AppHandle,
+    client: State<'_, GitHubClient>,
     page: Option<u32>,
     per_page: Option<u32>,
-    github_token: Option<String>,
-) -> Result<DiscoverPluginsResult, String> {
-    let page = page.unwrap_or(1);
-    let per_page = per_page.unwrap_or(20).clamp(1, 100);
+) -> Result<DiscoverPluginsResult, GitHubApiError> {
+    discover(
+        &client,
+        page.unwrap_or(1).max(1),
+        per_page.unwrap_or(20).clamp(1, 100),
+        &crate::commands::plugins::plugin_dirs(&app_handle),
+    )
+    .await
+}
 
-    let token = github_token.as_deref();
-
-    let (repos, total_count, rate_limit_remaining, rate_limit_reset) =
-        search_repositories(page, per_page, token).await?;
-
-    let plugin_dirs = crate::commands::plugins::plugin_dirs(&app_handle);
+pub(crate) async fn discover(
+    client: &GitHubClient,
+    page: u32,
+    per_page: u32,
+    plugin_dirs: &[PathBuf],
+) -> Result<DiscoverPluginsResult, GitHubApiError> {
+    let (repos, total_count, mut rate_limit) = search_repositories(client, page, per_page).await?;
     let mut discovered = Vec::with_capacity(repos.len());
-
     for repo in repos {
         let manifest_result =
-            fetch_plugin_manifest(&repo.owner.login, &repo.name, &repo.default_branch, token).await;
-
+            fetch_plugin_manifest(client, &repo.owner.login, &repo.name, &repo.default_branch)
+                .await;
         let (manifest, manifest_error, local_path) = match manifest_result {
-            Ok(Some(m)) => {
-                let local = find_local_install(&m.name, &plugin_dirs);
-                (Some(m), None, local)
+            Ok((Some(manifest), rate)) => {
+                rate_limit = rate;
+                let local = find_local_install(&manifest.name, plugin_dirs);
+                (Some(manifest), None, local)
             }
-            Ok(None) => (None, None, None),
-            Err(e) => (None, Some(e), None),
+            Ok((None, rate)) => {
+                rate_limit = rate;
+                (None, None, None)
+            }
+            // A manifest throttle stops discovery immediately; never hide it in one card.
+            Err(error) if error.is_rate_limit() || error.code != ErrorCode::ClientError => {
+                return Err(error)
+            }
+            Err(error) => {
+                rate_limit = error.rate_limit.map(|rate| *rate);
+                (None, Some(error.message), None)
+            }
         };
-
-        let is_installed = local_path.is_some();
         let verification = if repo.owner.login == "H2SYJ" {
-            "verified".to_string()
+            "verified"
         } else if manifest.is_some() {
-            "community".to_string()
+            "community"
         } else {
-            "unverified".to_string()
-        };
-
+            "unverified"
+        }
+        .to_owned();
         discovered.push(DiscoveredPlugin {
             repository: repo,
             manifest,
             manifest_error,
-            is_installed,
+            is_installed: local_path.is_some(),
             local_path: local_path.map(|p| p.display().to_string()),
             verification,
         });
     }
-
     Ok(DiscoverPluginsResult {
+        schema_version: "1.0.0",
         plugins: discovered,
         total_count,
-        rate_limit_remaining,
-        rate_limit_reset,
+        rate_limit,
     })
 }
 
-/// 解压 ZIP 到目标目录，过滤掉 GitHub ZIP 顶层 `owner-repo-hash/` 前缀，
-/// 并拒绝任何包含 `..` / 绝对路径 / 驱动器前缀的条目。
+/// Extract only regular files below the single GitHub archive root. Validate the original
+/// spelling before Path normalization so double separators, drive paths and `..` cannot hide.
 fn extract_zip_to_dir(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String> {
-    let cursor = Cursor::new(zip_bytes);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("解析 ZIP 失败: {e}"))?;
+    extract_zip_with_limits(zip_bytes, target_dir, EXTRACTION_LIMITS)
+}
 
+fn extract_zip_with_limits(
+    zip_bytes: &[u8],
+    target_dir: &Path,
+    limits: ExtractionLimits,
+) -> Result<(), String> {
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|_| "解析 ZIP 失败".to_owned())?;
+    if archive.len() > limits.entries {
+        return Err("ZIP 条目数量超过安全限制".into());
+    }
+    let mut extracted_bytes = 0;
+    let mut archive_root: Option<String> = None;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
-            .map_err(|e| format!("读取 ZIP 条目失败: {e}"))?;
-        let name = file.name().to_string();
-
-        // 跳过顶层目录条目（如 "owner-repo-hash/"）
-        if name.ends_with('/') {
+            .map_err(|_| "读取 ZIP 条目失败".to_owned())?;
+        let name = file.name().to_owned();
+        let parts: Vec<_> = name.trim_end_matches('/').split('/').collect();
+        if name.starts_with('/')
+            || name.contains(['\\', ':', '\0'])
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || matches!(*part, "." | ".."))
+            || file
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err("ZIP 包含不安全的条目".into());
+        }
+        if let Some(root) = &archive_root {
+            if root != parts[0] {
+                return Err("ZIP 顶层目录不一致".into());
+            }
+        } else {
+            archive_root = Some(parts[0].to_owned());
+        }
+        if file.is_dir() {
             continue;
         }
-
-        // 规范化路径：去掉顶层 `owner-repo-hash/` 前缀
-        // GitHub zipball 的根目录格式固定为 `<owner>-<repo>-<sha7>/`，永远带 `-`
-        let mut components = Path::new(&name).components();
-        if let Some(Component::Normal(seg)) = components.next() {
-            let seg_str = seg.to_string_lossy();
-            if !(seg_str.contains('-') || seg_str.contains('_')) {
-                // 顶层不是目录形式（异常情况），重置并跳过第一段
-                components = Path::new(&name).components();
-                let _ = components.next();
-            }
+        if parts.len() < 2 {
+            return Err("ZIP 文件不在仓库根目录内".into());
         }
-
-        let rel_path: PathBuf = components.collect();
-        if rel_path.as_os_str().is_empty() {
-            continue;
+        let relative: PathBuf = parts[1..].iter().collect();
+        if !relative
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err("ZIP 路径不合法".into());
         }
-
-        // 安全检查：拒绝 ..、绝对路径、驱动器前缀
-        let mut clean = PathBuf::new();
-        for comp in rel_path.components() {
-            match comp {
-                Component::Normal(seg) => clean.push(seg),
-                Component::CurDir => continue,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    return Err(format!("ZIP 条目不合法: {name}"));
-                }
-            }
+        let out = target_dir.join(relative);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| "创建插件子目录失败".to_owned())?;
         }
-
-        let out_path = target_dir.join(&clean);
-
-        // 确保父目录存在
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+        let allowed = limits
+            .entry_bytes
+            .min(limits.total_bytes.saturating_sub(extracted_bytes));
+        if file.size() > allowed {
+            return Err("ZIP 解压大小超过安全限制".into());
         }
-
-        let mut contents = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut contents)
-            .map_err(|e| format!("读取 ZIP 内容失败: {e}"))?;
-
-        std::fs::write(&out_path, &contents).map_err(|e| format!("写入文件失败: {e}"))?;
+        let mut output = std::fs::File::create(&out).map_err(|_| "创建插件文件失败".to_owned())?;
+        // Stream to disk and check actual bytes as well as the untrusted ZIP size metadata.
+        let copied = std::io::copy(
+            &mut (&mut file).take(allowed.saturating_add(1)),
+            &mut output,
+        )
+        .map_err(|_| "读取或写入 ZIP 内容失败".to_owned())?;
+        if copied > allowed {
+            return Err("ZIP 解压大小超过安全限制".into());
+        }
+        extracted_bytes += copied;
     }
-
     Ok(())
 }
 
-/// 下载仓库 ZIP 归档
-async fn download_repo_zip(
-    owner: &str,
-    repo: &str,
-    branch: &str,
-    token: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    let url = format!("{GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{branch}");
-    let response = fetch_github_api(&url, token).await?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("下载仓库 ZIP 失败: {error_text}"));
-    }
-
-    response
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("读取 ZIP 数据失败: {e}"))
+fn safe_plugin_name(name: &str) -> bool {
+    !name.is_empty()
+        && !matches!(name, "." | "..")
+        // Same policy as local PluginManifest::validate().
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
-#[command]
+/// Download and validation finish before touching an existing install. Rename failure rolls
+/// back the old directory; a throttle/network failure never creates backups or empty installs.
+fn activate_archive(
+    zip: &[u8],
+    manifest: &PluginManifest,
+    primary: &Path,
+) -> Result<PathBuf, GitHubApiError> {
+    if !safe_plugin_name(&manifest.name) {
+        return Err(GitHubApiError::client("插件名称不能作为安全目录名"));
+    }
+    std::fs::create_dir_all(primary).map_err(|_| GitHubApiError::client("创建插件根目录失败"))?;
+    // Discovery scans only direct children. Keep transaction folders one level deeper so
+    // neither a retained backup nor an interrupted staging directory can shadow a plugin.
+    let workspace = primary.join(".timepin-installs");
+    std::fs::create_dir_all(&workspace)
+        .map_err(|_| GitHubApiError::client("创建插件事务目录失败"))?;
+    let staging = workspace.join(format!("stage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&staging).map_err(|_| GitHubApiError::client("创建插件暂存目录失败"))?;
+    let result = (|| {
+        extract_zip_to_dir(zip, &staging).map_err(GitHubApiError::client)?;
+        let text = std::fs::read_to_string(staging.join("plugin.json"))
+            .map_err(|_| GitHubApiError::client("解压后未找到有效的 plugin.json"))?;
+        let extracted = PluginManifest::parse(&text).map_err(GitHubApiError::client)?;
+        let local = extracted.to_local().map_err(GitHubApiError::client)?;
+        if extracted.name != manifest.name || !local.validate().is_empty() {
+            return Err(GitHubApiError::client(
+                "归档中的 manifest 与安装目标不匹配或校验失败",
+            ));
+        }
+        let target = primary.join(&manifest.name);
+        let backup = workspace.join(format!("{}.bak-{}", manifest.name, uuid::Uuid::new_v4()));
+        let had_existing = target.exists();
+        if had_existing {
+            std::fs::rename(&target, &backup)
+                .map_err(|_| GitHubApiError::client("备份旧插件目录失败"))?;
+        }
+        if std::fs::rename(&staging, &target).is_err() {
+            if had_existing && std::fs::rename(&backup, &target).is_err() {
+                return Err(GitHubApiError::client(
+                    "安装切换失败，旧插件已保留在 .timepin-installs 下的 .bak 目录，请手动恢复",
+                ));
+            }
+            return Err(GitHubApiError::client("安装切换失败，旧插件已恢复"));
+        }
+        Ok(target)
+    })();
+    if staging.exists() {
+        let _ = std::fs::remove_dir_all(staging);
+    }
+    // Only remove an empty transaction root; retained backups are never deleted here.
+    let _ = std::fs::remove_dir(workspace);
+    result
+}
+
+#[command(rename_all = "camelCase")]
 pub async fn install_github_plugin(
     app_handle: tauri::AppHandle,
+    client: State<'_, GitHubClient>,
     owner: String,
     repo: String,
     branch: Option<String>,
-    github_token: Option<String>,
-) -> Result<String, String> {
-    let token = github_token.as_deref();
-    let branch = branch.unwrap_or_else(|| "main".to_string());
-
-    // 1) 先拉 manifest 用于确定目录名 + 预校验
-    let manifest = fetch_plugin_manifest(&owner, &repo, &branch, token)
-        .await?
-        .ok_or_else(|| "仓库中未找到 plugin.json".to_string())?;
-
-    let local_manifest = manifest
+) -> Result<String, GitHubApiError> {
+    let branch = branch.unwrap_or_else(|| "main".to_owned());
+    let (manifest, rate_limit) = fetch_plugin_manifest(&client, &owner, &repo, &branch).await?;
+    let manifest = manifest.ok_or_else(|| {
+        let mut error = GitHubApiError::new(
+            ErrorCode::NotFoundOrPrivate,
+            "仓库中未找到 plugin.json，或当前身份无权访问",
+            crate::core::github::Action::None,
+        );
+        error.rate_limit = rate_limit.map(Box::new);
+        error
+    })?;
+    let errors = manifest
         .to_local()
-        .map_err(|e| format!("manifest 转换失败: {e}"))?;
-
-    let errors = local_manifest.validate();
-    if !errors.is_empty() {
-        return Err(format!("manifest 校验失败: {}", errors.join("; ")));
-    }
-
-    // 2) 确定安装目录
-    let plugin_dirs = crate::commands::plugins::plugin_dirs(&app_handle);
-    let primary_dir = plugin_dirs
-        .first()
-        .ok_or_else(|| "未找到插件目录".to_string())?;
-
-    let plugin_dir = primary_dir.join(&manifest.name);
-    if plugin_dir.exists() {
-        // 已存在：先备份旧目录
-        let backup_dir = primary_dir.join(format!(
-            "{}.bak-{}",
-            manifest.name,
-            chrono::Utc::now().timestamp()
+        .map_err(GitHubApiError::client)?
+        .validate();
+    if !errors.is_empty() || !safe_plugin_name(&manifest.name) {
+        return Err(GitHubApiError::client(
+            "manifest 校验失败或插件目录名不安全",
         ));
-        std::fs::rename(&plugin_dir, &backup_dir)
-            .map_err(|e| format!("备份旧插件目录失败: {e}"))?;
     }
-
-    std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建插件目录失败: {e}"))?;
-
-    // 3) 下载并解压 ZIP
-    let zip_bytes = download_repo_zip(&owner, &repo, &branch, token).await?;
-    extract_zip_to_dir(&zip_bytes, &plugin_dir)?;
-
-    // 4) 验证解压后确有 plugin.json（防止仓库结构异常）
-    if !plugin_dir.join("plugin.json").is_file() && !plugin_dir.join("manifest.json").is_file() {
-        // 清掉解压的目录，避免留下半成品
-        let _ = std::fs::remove_dir_all(&plugin_dir);
-        return Err("解压后未找到 plugin.json".to_string());
-    }
-
-    // 5) 触发插件重新扫描（异步事件而非直接调用 reload_plugins，避免循环调用）
-    // 前端监听到 plugin_status_changed 会刷新列表
+    // Bundled search roots can be read-only (e.g. Program Files). Community installs
+    // always use the writable, app-owned root, not the first discovery directory.
+    let primary = crate::core::get_default_plugins_dir(&app_handle);
+    let url = api_url(&["repos", &owner, &repo, "zipball", &branch], &[])?;
+    let archive = client.public_zip(url).await?;
+    let plugin_name = manifest.name.clone();
+    let plugin_dir = tauri::async_runtime::spawn_blocking(move || {
+        activate_archive(&archive.body, &manifest, &primary)
+    })
+    .await
+    .map_err(|_| GitHubApiError::client("插件安装任务失败"))??;
     let _ = app_handle.emit(
         crate::plugins::manager::EVENT_PLUGIN_STATUS,
-        serde_json::json!({
-            "pluginName": manifest.name,
-            "status": "ready",
-            "detail": "installed via GitHub"
-        }),
+        serde_json::json!({ "pluginName": plugin_name, "status": "ready", "detail": "installed via GitHub" }),
     );
-
-    Ok(format!(
-        "插件 {} 安装成功，路径: {}",
-        manifest.name,
-        plugin_dir.display()
-    ))
+    // The UI merges this into DiscoveredPlugin.localPath, so return the path only.
+    Ok(plugin_dir.display().to_string())
 }
 
 #[cfg(test)]
@@ -488,6 +613,140 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    fn valid_manifest() -> PluginManifest {
+        PluginManifest::parse(r#"{"protocolVersion":"1.0.0","name":"example-plugin","version":"1.0.0","description":"test","author":"test","entry":"main.py","runtime":"python","capabilities":["metadata"],"parametersSchema":{},"outputSchema":{}}"#).unwrap()
+    }
+
+    #[test]
+    fn invalid_archive_does_not_move_or_backup_existing_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = valid_manifest();
+        let existing = tmp.path().join(&manifest.name);
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::write(existing.join("old.py"), b"original").unwrap();
+        for zip in [
+            b"not a zip".to_vec(),
+            build_zip(&[("root/missing.txt", b"bad")]),
+            build_zip(&[("root/../../escape", b"bad")]),
+        ] {
+            assert!(activate_archive(&zip, &manifest, tmp.path()).is_err());
+            assert_eq!(std::fs::read(existing.join("old.py")).unwrap(), b"original");
+            assert_eq!(
+                std::fs::read_dir(tmp.path()).unwrap().count(),
+                1,
+                "no backup or staging should remain"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_archive_is_staged_then_replaces_existing_install_with_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = valid_manifest();
+        let existing = tmp.path().join(&manifest.name);
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::write(existing.join("old.py"), b"original").unwrap();
+        let json = serde_json::to_vec(&manifest).unwrap();
+        std::fs::write(existing.join("plugin.json"), &json).unwrap();
+        let zip = build_zip(&[
+            ("root/plugin.json", &json),
+            ("root/main.py", b"print('new')"),
+        ]);
+        assert_eq!(
+            activate_archive(&zip, &manifest, tmp.path()).unwrap(),
+            existing
+        );
+        assert!(!existing.join("old.py").exists());
+        assert_eq!(
+            std::fs::read(existing.join("main.py")).unwrap(),
+            b"print('new')"
+        );
+        let workspace = tmp.path().join(".timepin-installs");
+        let backups: Vec<_> = std::fs::read_dir(&workspace)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".bak-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read(backups[0].join("old.py")).unwrap(),
+            b"original"
+        );
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 2);
+        // An interrupted extraction with a valid manifest is not a direct plugin child.
+        let interrupted = workspace.join("stage-interrupted");
+        std::fs::create_dir(&interrupted).unwrap();
+        std::fs::write(interrupted.join("plugin.json"), &json).unwrap();
+        let discoverable: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| crate::plugins::manifest::PluginManifest::load(&entry.path()).ok())
+            .map(|manifest| manifest.name)
+            .collect();
+        assert_eq!(discoverable, vec!["example-plugin"]);
+    }
+
+    #[test]
+    fn zip_limits_bound_entry_count_individual_size_and_expanded_total() {
+        let zip = build_zip(&[("root/a.txt", b"123"), ("root/b.txt", b"456")]);
+        for limits in [
+            ExtractionLimits {
+                entries: 1,
+                entry_bytes: 10,
+                total_bytes: 10,
+            },
+            ExtractionLimits {
+                entries: 10,
+                entry_bytes: 2,
+                total_bytes: 10,
+            },
+            ExtractionLimits {
+                entries: 10,
+                entry_bytes: 10,
+                total_bytes: 5,
+            },
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(extract_zip_with_limits(&zip, tmp.path(), limits).is_err());
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        extract_zip_with_limits(
+            &zip,
+            tmp.path(),
+            ExtractionLimits {
+                entries: 2,
+                entry_bytes: 3,
+                total_bytes: 6,
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(tmp.path().join("b.txt")).unwrap(), b"456");
+    }
+
+    #[test]
+    fn manifest_and_repository_names_cannot_escape_plugin_root() {
+        for name in [
+            "../escape",
+            "..",
+            "/absolute",
+            "C:evil",
+            "foo/bar",
+            "foo\\bar",
+            "bad.name",
+            "bad.",
+        ] {
+            assert!(!safe_plugin_name(name));
+            assert!(find_local_install(name, &[]).is_none());
+        }
+        assert!(validate_repository("owner?x=1", "repo").is_err());
+        assert!(validate_repository("owner", "repo/../../x").is_err());
     }
 
     #[test]
@@ -517,8 +776,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // "/abs/..." 在 Path::components 中是 RootDir + Normal，应被拒绝
         let res = extract_zip_to_dir(&zip, tmp.path());
-        // 注意：双斜线会被 normalize 成单斜线开头，依然是 RootDir
-        // 如果通过了说明路径未含 RootDir，至少不应 panic
-        let _ = res;
+        assert!(
+            res.is_err(),
+            "absolute/double-separator entry must be rejected"
+        );
     }
 }

@@ -451,16 +451,57 @@ export interface DiscoveredPlugin {
   verification: PluginVerification;
 }
 
+/** GitHub 速率限制信息；所有时间戳均为本地校准后的 epoch 毫秒。 */
+export interface GitHubRateInfo {
+  limit: number | null;
+  remaining: number | null;
+  resetAt: number | null;
+  resource: string | null;
+}
+
+export type GitHubApiErrorCode =
+  | 'AUTH_INVALID'
+  | 'PRIMARY_RATE_LIMIT'
+  | 'SECONDARY_RATE_LIMIT'
+  | 'RATE_LIMIT_UNKNOWN'
+  | 'RATE_WAIT'
+  | 'NOT_FOUND_OR_PRIVATE'
+  | 'FORBIDDEN'
+  | 'CLIENT_ERROR'
+  | 'SERVER_ERROR'
+  | 'NETWORK_ERROR';
+
+export type GitHubApiErrorAction = 'WAIT' | 'CONFIGURE_TOKEN' | 'REAUTHENTICATE' | 'NONE';
+
+/** 所有 GitHub IPC 失败均以该对象 reject（不是 JSON 字符串）。 */
+export interface GitHubApiError {
+  schemaVersion: '1.0.0';
+  code: GitHubApiErrorCode;
+  message: string;
+  retryAt: number | null;
+  action: GitHubApiErrorAction;
+  rateLimit: GitHubRateInfo | null;
+}
+
+/** GitHub 登录会话；token 本体永远不返回前端。 */
+export interface GitHubSession {
+  schemaVersion: '1.0.0';
+  identity: 'ANONYMOUS' | 'AUTHENTICATED' | 'TOKEN_INVALID';
+  remembered: boolean;
+  /** 凭据库写入失败等警告；非 null 时 token 仅保存在内存 */
+  storageWarning: string | null;
+  rateLimit: GitHubRateInfo | null;
+}
+
 export interface DiscoverPluginsResult {
+  schemaVersion: '1.0.0';
   plugins: DiscoveredPlugin[];
   totalCount: number;
-  rateLimitRemaining: number | null;
-  rateLimitReset: number | null;
+  rateLimit: GitHubRateInfo | null;
 }
 
 export interface InstallPluginParams {
   owner: string;
   repo: string;
   branch?: string;
-  githubToken?: string;
 }
