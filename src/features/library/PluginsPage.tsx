@@ -144,10 +144,10 @@ export function PluginsPage() {
   if (loading) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+        <header className="flex items-center justify-between gap-4 px-8 py-6">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">插件管理</h1>
-            <p className="mt-1 text-sm text-default-500">
+            <h1 className="text-2xl font-semibold tracking-tight">插件管理</h1>
+            <p className="mt-1.5 text-sm text-default-500">
               通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
             </p>
           </div>
@@ -170,10 +170,10 @@ export function PluginsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+      <header className="flex items-center justify-between gap-4 px-8 py-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">插件管理</h1>
-          <p className="mt-1 text-sm text-default-500">
+          <h1 className="text-2xl font-semibold tracking-tight">插件管理</h1>
+          <p className="mt-1.5 text-sm text-default-500">
             通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
           </p>
         </div>

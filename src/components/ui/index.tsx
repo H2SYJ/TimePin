@@ -146,14 +146,17 @@ Card.displayName = 'Card';
 
 export { CardBody, CardFooter, CardHeader };
 
-export function Input({ className, variant = 'bordered', radius = 'md', ...props }: HeroInputProps) {
+export function Input({ className, variant = 'bordered', radius = 'md', labelPlacement = 'outside', ...props }: HeroInputProps) {
   return (
     <HeroInput
       variant={variant}
       radius={radius}
+      labelPlacement={labelPlacement}
       classNames={{
-        input: 'text-sm',
+        input: 'text-sm text-foreground',
         inputWrapper: cn('h-9 min-h-9 bg-background', className),
+        innerWrapper: 'text-foreground',
+        label: 'text-sm font-medium text-foreground',
       }}
       {...props}
     />

@@ -186,10 +186,10 @@ export function MarksPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-divider px-4 py-5 lg:px-8">
+      <header className="flex items-center justify-between gap-4 px-8 py-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">标注工作台</h1>
-          <p className="mt-1 text-sm text-default-500">{video ? '播放、定位并管理时间点与区间' : '请先导入并选择一个视频'}</p>
+          <h1 className="text-2xl font-semibold tracking-tight">标注工作台</h1>
+          <p className="mt-1.5 text-sm text-default-500">{video ? '播放、定位并管理时间点与区间' : '请先导入并选择一个视频'}</p>
         </div>
         {video ? <div className="flex max-w-full items-center gap-3">
           <label htmlFor="marks-video" className="shrink-0 text-sm font-medium">当前视频</label>
