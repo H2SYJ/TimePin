@@ -138,9 +138,105 @@ TimePin 的目标是成为**打标规则可插拔、识别结果跨软件可见�
 
 ---
 
-## 13. 开发快速看效果指南
+## 13. 环境准备与首次安装
 
-### 13.1 三种运行模式对比
+### 13.1 前置依赖检查
+
+| 工具 | 版本要求 | 检查命令 | 说明 |
+|------|----------|----------|------|
+| **Node.js** | >= 18.0 | `node --version` | 前端构建运行时 |
+| **pnpm** | >= 9.0 | `pnpm --version` | 包管理器（项目锁定 pnpm@9.7.0） |
+| **Rust** | >= 1.80 | `rustc --version` | Tauri 后端编译 |
+| **Cargo** | >= 1.80 | `cargo --version` | Rust 包管理器 |
+| **WebView2** | Windows 10/11 自带 | 无需检查 | Tauri 运行时依赖（Windows） |
+| **Git** | 任意现代版本 | `git --version` | 版本控制 |
+
+> **Windows 额外依赖**：确保已安装 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Windows 10 2004+ 通常已预装）。
+
+### 13.2 完整安装流程（从零到可运行）
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/H2SYJ/TimePin.git
+cd TimePin
+
+# 2. 切换到开发主分支
+git checkout beta          # 日常开发基于 beta；main 用于发布
+
+# 3. 安装前端依赖（首次约 2-5 分钟）
+pnpm install
+
+# 4. （可选）验证 Rust 工具链
+cd src-tauri
+cargo check          # 快速类型检查，不生成二进制
+cd ..
+
+# 5. 构建 Debug 版本（首次编译约 3-10 分钟，生成可执行文件）
+cd src-tauri
+cargo build          # 生成 src-tauri/target/debug/timepin.exe
+
+# 6. 启动开发模式（二选一）
+# 方式 A：前端热重载开发（推荐，UI 改动即时生效）
+pnpm dev             # → 浏览器打开 http://localhost:5173
+
+# 方式 B：Tauri 全栈开发模式（前端热重载 + Rust 后端）
+pnpm tauri dev       # 自动启动 Vite + 编译运行 Rust
+```
+
+### 13.3 首次验证清单
+
+```bash
+# ✅ 前端服务正常
+curl http://localhost:5173/          # 返回 HTML 页面
+
+# ✅ Rust 可执行文件正常
+./src-tauri/target/debug/timepin.exe # 启动桌面窗口
+
+# ✅ 生产构建正常
+pnpm build                           # TypeScript 编译 + Vite 打包
+pnpm tauri build                     # 生成 release 安装包
+```
+
+### 13.4 常见问题排查
+
+| 问题 | 排查命令 | 解决方案 |
+|------|----------|----------|
+| `pnpm install` 超时 | `pnpm config list` | 检查网络代理 / 换用国内镜像源 |
+| `cargo build` 失败 | `cargo clean && cargo build` | 清理缓存后重试；检查 Rust 版本 |
+| `timepin.exe` 启动白屏 | `pnpm dev` 后 F12 查看 Console | 检查 Vite 是否正常运行在 5173 端口 |
+| Tauri 图标缺失 | `ls src-tauri/icons/` | 运行 `pnpm tauri icon` 自动生成 |
+| 端口 5173 被占用 | `netstat -ano \| findstr 5173` | 结束占用进程或修改 `vite.config.ts` 端口 |
+
+### 13.5 开发环境推荐配置
+
+```json
+// .vscode/settings.json (推荐)
+{
+  "rust-analyzer.cargo.buildScripts.enable": true,
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode"
+}
+```
+
+```json
+// .vscode/extensions.json (推荐安装)
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "bradlc.vscode-tailwindcss",
+    "tauri-apps.tauri-vscode"
+  ]
+}
+```
+
+---
+
+## 14. 开发快速看效果指南
+
+### 14.1 三种运行模式对比
 
 | 模式 | 命令 | 启动速度 | 热重载 | 适用场景 |
 |------|------|----------|--------|----------|
@@ -148,7 +244,7 @@ TimePin 的目标是成为**打标规则可插拔、识别结果跨软件可见�
 | **Tauri 开发模式** | `pnpm tauri dev` | ~30-60 秒 | 前端 ✅ / Rust 需重编译 | 全栈联调、IPC 测试、插件系统调试、原生 API 验证 |
 | **Debug 可执行文件** | `src-tauri/target/debug/timepin.exe` | ~1 秒 | ❌ 无 | 快速验证构建产物、演示、集成测试、Rust 逻辑验证 |
 
-### 13.2 推荐日常开发流程
+### 14.2 推荐日常开发流程
 
 ```bash
 # 终端 1：启动前端热重载（主力开发，90% 场景）
@@ -161,7 +257,7 @@ cd src-tauri && cargo build  # 增量编译约 5-15 秒
 ../src-tauri/target/debug/timepin.exe
 ```
 
-### 13.3 关键文件修改后的生效方式
+### 14.3 关键文件修改后的生效方式
 
 | 文件类型 | 示例路径 | 生效方式 |
 |----------|----------|----------|
@@ -172,7 +268,7 @@ cd src-tauri && cargo build  # 增量编译约 5-15 秒
 | **Rust 依赖** | `src-tauri/Cargo.toml` | `cargo build` (首次较慢，后续增量) |
 | **Tauri 配置** | `src-tauri/tauri.conf.json` | `cargo build` + 重启 `timepin.exe` |
 
-### 13.4 常用调试命令速查
+### 14.4 常用调试命令速查
 
 ```bash
 # ===== 前端 =====
@@ -201,7 +297,7 @@ pnpm store prune            # 清理 pnpm 存储缓存
 rm -rf node_modules dist    # 清理前端依赖和构建产物
 ```
 
-### 13.5 调试技巧
+### 14.5 调试技巧
 
 | 场景 | 方法 |
 |------|------|
@@ -212,7 +308,7 @@ rm -rf node_modules dist    # 清理前端依赖和构建产物
 | **查看 Rust 日志** | 终端直接显示 `println!`/`log::info!` 输出；或设置 `RUST_LOG=debug` |
 | **验证构建产物** | `pnpm tauri build` 生成 `src-tauri/target/release/bundle/` 下的安装包 |
 
-### 13.6 端口冲突处理
+### 14.6 端口冲突处理
 
 ```bash
 # 如果遇到 "Port 5173 is already in use"
