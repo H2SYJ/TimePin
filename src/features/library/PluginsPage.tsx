@@ -1,9 +1,10 @@
-import { Card, CardBody, CardHeader, Button, Badge } from '@/components/ui';
+import { Card, CardBody, CardHeader, Button, Badge, Section, Field, Input, Select, SelectItem, Switch } from '@/components/ui';
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { inferParamKind, type PluginParamSchema } from '@/types';
 
 export function PluginsPage() {
   const { settings } = useAppStore();
@@ -11,6 +12,7 @@ export function PluginsPage() {
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Record<string, { progress: number; message: string }>>({});
   const [logs, setLogs] = useState<string[]>([]);
+  const [paramValues, setParamValues] = useState<Record<string, Record<string, unknown>>>({});
 
   useEffect(() => {
     loadPlugins();
@@ -22,6 +24,16 @@ export function PluginsPage() {
     try {
       const list = await api.getPlugins();
       setPlugins(list);
+      // 初始化参数默认值
+      setParamValues((prev) => {
+        const next = { ...prev };
+        for (const p of list) {
+          next[p.name] ??= Object.fromEntries(
+            Object.entries(p.parametersSchema ?? {}).map(([k, s]: [string, any]) => [k, s.default ?? ''])
+          );
+        }
+        return next;
+      });
     } catch (e) {
       console.error('加载插件列表失败:', e);
     } finally {
@@ -80,10 +92,15 @@ export function PluginsPage() {
     }
   };
 
+  const handleParamChange = (pluginName: string, key: string, value: unknown) => {
+    setParamValues((prev) => ({
+      ...prev,
+      [pluginName]: { ...prev[pluginName], [key]: value },
+    }));
+  };
+
   const handleRun = async (plugin: any, video: any) => {
     setLogs([]);
-    // 在实际应用中会弹出对话框让用户选择视频和参数
-    // 这里演示直接使用第一个视频和默认参数
     if (!video) {
       setLogs(['[WARN] 请先在媒体库选择一个视频']);
       return;
@@ -92,7 +109,7 @@ export function PluginsPage() {
     const outputDir = `${settings.importDirectory || '.'}/plugin-output/${plugin.name}/${taskId}`;
     try {
       setRunningTasks((prev) => ({ ...prev, [taskId]: { progress: 0, message: '启动中...' } }));
-      const result = await api.runPlugin(plugin.name, video, {}, outputDir);
+      const result = await api.runPlugin(plugin.name, video, paramValues[plugin.name] ?? {}, outputDir);
       setLogs((prev) => [...prev, `[OK] 完成：生成 ${result.marks.length} 个标注`]);
       setRunningTasks((prev) => {
         const next = { ...prev };
@@ -126,104 +143,131 @@ export function PluginsPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <Loader2 className="h-6 w-6 animate-spin" />
-          <span className="text-sm">加载插件中…</span>
-        </div>
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">插件管理</h1>
+            <p className="mt-1 text-sm text-default-500">
+              通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
+            </p>
+          </div>
+          <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
+            <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
+            重新加载
+          </Button>
+        </header>
+        <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3 text-default-400">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <span className="text-sm">加载插件中…</span>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col p-4 gap-4 overflow-auto">
-      {/* 顶部工具栏 */}
-      <div className="flex items-center gap-3">
-        <h2 className="text-lg font-semibold">插件管理</h2>
-        <Button variant="secondary" size="sm" onClick={handleReload} disabled={loading}>
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex items-center justify-between gap-4 border-b border-divider px-8 py-5">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">插件管理</h1>
+          <p className="mt-1 text-sm text-default-500">
+            通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
+          </p>
+        </div>
+        <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
           <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
           重新加载
         </Button>
-        {plugins.some((p) => p.status === 'crashed') && (
-          <Badge className="bg-warning text-warning-foreground">有插件已崩溃</Badge>
-        )}
-      </div>
+      </header>
 
-      {/* 插件列表 */}
-      <div className="flex-1 overflow-auto space-y-3">
-        {plugins.length === 0 ? (
-          <Card className="p-8 text-center text-muted-foreground">
-            <Code className="h-12 w-12 mx-auto mb-3 opacity-30" aria-hidden="true" />
-            <p className="text-sm">未发现插件</p>
-            <p className="text-xs mt-1">
-              在 <code>plugins/</code> 目录或设置的自定义插件目录下放入
-              <code>plugin.json</code> + 入口文件，点击「重新加载」即可发现。
-            </p>
-          </Card>
-        ) : (
-          plugins.map((plugin) => (
-            <PluginCard
-              key={plugin.name}
-              plugin={plugin}
-              selectedVideo={selectedVideo}
-              runningTasks={runningTasks}
-              onRun={handleRun}
-              onCancel={handleCancel}
-              onStop={handleStopPlugin}
-            />
-          ))
-        )}
-      </div>
-
-      {/* 日志面板 */}
-      {logs.length > 0 && (
-        <Card className="h-64 flex flex-col">
-          <CardHeader className="flex items-center justify-between p-3">
-            <h3 className="text-sm font-medium">插件日志</h3>
-            <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </CardHeader>
-          <CardBody className="flex-1 overflow-auto p-3 font-mono text-xs bg-default-50 rounded-lg">
-            <div className="space-y-1">
-              {logs.map((log, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    'px-2 py-1 rounded',
-                    log.includes('[ERROR]') && 'bg-danger-50 text-danger',
-                    log.includes('[WARN]') && 'bg-warning-50 text-warning',
-                    log.includes('[OK]') && 'bg-success-50 text-success'
-                  )}
-                >
-                  {log}
-                </div>
+      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
+        <div className="w-full min-w-0 space-y-5 pb-8">
+          {plugins.length === 0 ? (
+            <Section title="未发现插件" description="在 plugins/ 目录或设置的自定义插件目录下放入 plugin.json + 入口文件，点击「重新加载」即可发现。">
+              <div className="flex flex-col items-center gap-3 text-default-400 py-8">
+                <Code className="h-12 w-12 opacity-30" aria-hidden="true" />
+                <p className="text-sm">未发现插件</p>
+              </div>
+            </Section>
+          ) : (
+            <>
+              {plugins.map((plugin) => (
+                <PluginSection
+                  key={plugin.name}
+                  plugin={plugin}
+                  selectedVideo={selectedVideo}
+                  runningTasks={runningTasks}
+                  paramValues={paramValues[plugin.name] ?? {}}
+                  onParamChange={handleParamChange}
+                  onRun={handleRun}
+                  onCancel={handleCancel}
+                  onStop={handleStopPlugin}
+                />
               ))}
-            </div>
-          </CardBody>
-        </Card>
-      )}
+
+              {/* 运行日志 Section */}
+              {logs.length > 0 && (
+                <Section title="运行日志" description="最近 100 条插件输出">
+                  <Card className="h-64 flex flex-col">
+                    <CardHeader className="flex items-center justify-between p-3">
+                      <h3 className="text-sm font-medium">插件日志</h3>
+                      <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </CardHeader>
+                    <CardBody className="flex-1 overflow-auto p-3 font-mono text-xs bg-default-50 rounded-lg">
+                      <div className="space-y-1">
+                        {logs.map((log, i) => (
+                          <div
+                            key={i}
+                            className={cn(
+                              'px-2 py-1 rounded',
+                              log.includes('[ERROR]') && 'bg-danger-50 text-danger',
+                              log.includes('[CRASHED]') && 'bg-danger-50 text-danger',
+                              log.includes('[WARN]') && 'bg-warning-50 text-warning',
+                              log.includes('[OK]') && 'bg-success-50 text-success'
+                            )}
+                          >
+                            {log}
+                          </div>
+                        ))}
+                      </div>
+                    </CardBody>
+                  </Card>
+                </Section>
+              )}
+            </>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
 
-interface PluginCardProps {
+interface PluginSectionProps {
   plugin: any;
   selectedVideo: any;
   runningTasks: Record<string, { progress: number; message: string }>;
+  paramValues: Record<string, unknown>;
+  onParamChange: (pluginName: string, key: string, value: unknown) => void;
   onRun: (plugin: any, video: any) => void;
   onCancel: (pluginName: string, taskId: string) => void;
   onStop: (pluginName: string) => void;
 }
 
-function PluginCard({
+function PluginSection({
   plugin,
   selectedVideo,
   runningTasks,
+  paramValues,
+  onParamChange,
   onRun,
   onCancel,
   onStop,
-}: PluginCardProps) {
+}: PluginSectionProps) {
   const isRunning = plugin.status === 'running';
   const isReady = plugin.status === 'ready';
   const isCrashed = plugin.status === 'crashed';
@@ -237,7 +281,7 @@ function PluginCard({
     ? <AlertTriangle className="h-4 w-4 text-danger" />
     : isInvalid
     ? <XCircle className="h-4 w-4 text-warning" />
-    : <RotateCcw className="h-4 w-4 text-muted-foreground" />;
+    : <RotateCcw className="h-4 w-4 text-default-400" />;
 
   const statusText = isRunning
     ? '运行中'
@@ -250,94 +294,133 @@ function PluginCard({
     : '未知';
 
   // 查找该插件的运行中任务
-  const runningTask = Object.entries(runningTasks).find(([_, v]) => v); // 简化：只要有进度就认为在跑
+  const runningTask = Object.entries(runningTasks).find(([_, v]) => v);
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-              <Code className="h-5 w-5 text-primary" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="font-medium truncate">{plugin.name}</h3>
-                <Badge variant="flat" className="text-xs">{plugin.runtime}</Badge>
-                {statusIcon}
-                <span className="text-xs text-muted-foreground">{statusText}</span>
-              </div>
-              <p className="text-xs text-muted-foreground truncate mt-1">{plugin.description}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                v{plugin.version} · {plugin.author} · {plugin.capabilities.join(', ') || '无声明能力'}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {isRunning && runningTask && (
-              <div className="flex items-center gap-2 w-48">
-                <div className="flex-1 h-1.5 bg-default-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary transition-all"
-                    style={{ width: `${runningTask[1].progress * 100}%` }}
-                  />
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => onCancel(plugin.name, runningTask[0])}
-                  aria-label="取消任务"
-                >
-                  <Square className="h-4 w-4" />
-                </Button>
-              </div>
+    <Section
+      title={plugin.name}
+      description={`${plugin.description} · v${plugin.version} · ${plugin.author}`}
+      trailing={
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge
+            className={cn(
+              'text-xs',
+              isReady && 'bg-success-50 text-success',
+              isRunning && 'bg-primary-50 text-primary',
+              isCrashed && 'bg-danger-50 text-danger',
+              isInvalid && 'bg-warning-50 text-warning'
             )}
-            {isReady && selectedVideo && (
-              <Button size="sm" onClick={() => onRun(plugin, selectedVideo)}>
-                <Play className="h-4 w-4 mr-1" aria-hidden="true" />
-                运行
-              </Button>
-            )}
-            {isCrashed && (
-              <Button variant="secondary" size="sm" onClick={() => onRun(plugin, selectedVideo)}>
-                <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
-                重试
-              </Button>
-            )}
-            {(isRunning || isReady) && (
-              <Button variant="ghost" size="icon" onClick={() => onStop(plugin.name)} aria-label="停止插件">
-                <Square className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-
-      {plugin.parametersSchema && Object.keys(plugin.parametersSchema).length > 0 && (
-        <CardBody className="px-3 pb-3 pt-0">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
-            {Object.entries(plugin.parametersSchema).map(([key, schema]: [string, any]) => (
-              <div key={key} className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">{schema.title || key}</label>
-                <input
-                  type={schema.type === 'number' ? 'number' : 'text'}
-                  defaultValue={schema.default ?? ''}
-                  className="w-full h-8 px-2 text-xs bg-background border border-divider rounded-md"
-                  placeholder={schema.description}
+          >
+            {statusIcon} {statusText}
+          </Badge>
+          {isRunning && runningTask && (
+            <div className="flex items-center gap-2 w-48">
+              <div className="flex-1 h-1.5 bg-default-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{ width: `${runningTask[1].progress * 100}%` }}
                 />
               </div>
-            ))}
-          </div>
-        </CardBody>
-      )}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onCancel(plugin.name, runningTask[0])}
+                aria-label="取消任务"
+              >
+                <Square className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+          {isReady && selectedVideo && (
+            <Button size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+              <Play className="h-4 w-4 mr-1" aria-hidden="true" />
+              运行
+            </Button>
+          )}
+          {isCrashed && (
+            <Button variant="secondary" size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+              <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
+              重试
+            </Button>
+          )}
+          {(isRunning || isReady) && (
+            <Button variant="ghost" size="icon" onClick={() => onStop(plugin.name)} aria-label="停止插件">
+              <Square className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {Object.entries(plugin.parametersSchema ?? {}).map(([key, schema]: [string, any]) => (
+        <PluginParamField
+          key={key}
+          pluginName={plugin.name}
+          paramKey={key}
+          schema={schema}
+          value={paramValues[key] ?? schema.default ?? ''}
+          onChange={(value) => onParamChange(plugin.name, key, value)}
+        />
+      ))}
+    </Section>
+  );
+}
 
-      {plugin.statusDetail && (
-        <CardBody className="px-3 pb-3 pt-0">
-          <div className="text-xs text-warning bg-warning-50 p-2 rounded">
-            {plugin.statusDetail}
-          </div>
-        </CardBody>
+interface PluginParamFieldProps {
+  pluginName: string;
+  paramKey: string;
+  schema: PluginParamSchema;
+  value: unknown;
+  onChange: (value: unknown) => void;
+}
+
+function PluginParamField({ paramKey, schema, value, onChange }: PluginParamFieldProps) {
+  const kind = inferParamKind(schema);
+
+  const handleNumberChange = (v: string) => {
+    const num = Number(v);
+    onChange(Number.isNaN(num) ? '' : num);
+  };
+
+  return (
+    <Field label={schema.title || paramKey} hint={schema.description}>
+      {kind === 'boolean' && (
+        <Switch
+          checked={Boolean(value)}
+          onCheckedChange={(checked) => onChange(checked)}
+          label={schema.title || paramKey}
+        />
       )}
-    </Card>
+      {kind === 'number' && (
+        <Input
+          type="number"
+          min={schema.minimum}
+          max={schema.maximum}
+          step={schema.type === 'integer' ? 1 : undefined}
+          value={value === '' ? '' : String(value)}
+          onValueChange={handleNumberChange}
+        />
+      )}
+      {kind === 'select' && (
+        <Select
+          selectedKeys={value !== '' && value !== undefined ? [String(value)] : []}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0];
+            if (val !== undefined) onChange(val);
+          }}
+        >
+          {(schema.enum ?? []).map((o) => (
+            <SelectItem key={String(o)} textValue={String(o)}>
+              {String(o)}
+            </SelectItem>
+          ))}
+        </Select>
+      )}
+      {kind === 'text' && (
+        <Input
+          value={value === undefined ? '' : String(value)}
+          onValueChange={onChange}
+        />
+      )}
+    </Field>
   );
 }

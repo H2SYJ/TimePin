@@ -122,10 +122,34 @@ export interface PluginInfo {
   author: string;
   runtime: string;
   capabilities: string[];
-  parametersSchema: unknown;
+  parametersSchema: Record<string, PluginParamSchema>;
   dir: string;
   status: 'ready' | 'invalid' | 'crashed' | 'running';
   statusDetail: string | null;
+}
+
+/** 插件参数 JSON Schema 定义 */
+export interface PluginParamSchema {
+  type?: 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  items?: { enum?: unknown[] };
+  minimum?: number;
+  maximum?: number;
+}
+
+/** 推断出的参数控件类型 */
+export type ParamKind = 'text' | 'number' | 'boolean' | 'select' | 'multiselect';
+
+/** 根据 JSON Schema 推断控件类型 */
+export function inferParamKind(schema: PluginParamSchema): ParamKind {
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) return 'select';
+  if (schema.type === 'array' && Array.isArray(schema.items?.enum)) return 'multiselect';
+  if (schema.type === 'boolean') return 'boolean';
+  if (schema.type === 'number' || schema.type === 'integer') return 'number';
+  return 'text';
 }
 
 export interface PluginRunParams {

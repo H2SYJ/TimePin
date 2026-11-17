@@ -1,48 +1,8 @@
 import { Check, Info, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Button, Card, Input, Label, Select, SelectItem, Switch } from '@/components/ui';
+import { Button, Input, Select, SelectItem, Switch, Section, Field } from '@/components/ui';
 import { useAppStore } from '@/stores/app';
 import type { ExportMode, Settings, Theme } from '@/types';
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Card className="p-6">
-      <div className="mb-5">
-        <h2 className="text-base font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-default-500">{description}</p>
-      </div>
-      <div className="space-y-5">{children}</div>
-    </Card>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[180px_minmax(0,1fr)] sm:items-center sm:gap-4">
-      <div>
-        <Label>{label}</Label>
-        {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
 
 export function SettingsPage() {
   const settings = useAppStore((state) => state.settings);
