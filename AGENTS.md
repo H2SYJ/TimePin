@@ -95,9 +95,43 @@ timepin/
 5. 每次交付前尽量运行 `cargo check` / `cargo test` 与 `pnpm build`；无法验证时必须明确说明未验证及原因
 6. 不引入未经讨论的重量级依赖；不修改与任务无关的文件
 
-## Git 提交规范
+## Git 交付规范（新规则）
+
+### 分支策略
+- **主分支**：`main` —— 仅用于正式发布版本，受保护，仅通过 `beta` 合并更新
+- **开发集成分支**：`beta` —— 日常开发的 PR 目标分支，所有功能/修复 PR 合并到此分支
+- **日常开发分支**：`<动作>-<功能>` 格式，例如：
+  - `feat-timeline-markers` — 新增时间轴标记功能
+  - `fix-export-crash` — 修复导出崩溃
+  - `refactor-plugin-ipc` — 重构插件 IPC
+  - `docs-architecture` — 文档更新
+  - `test-formats-golden` — 增加格式生成器金标测试
+  - `chore-deps-update` — 依赖升级
+- **禁止** 再使用 `v0.0.1`、`v0.0.2` 这种版本号形式的分支名
+
+### 版本号管理
+- 版本号由 **`beta` 合并至 `main` 时** 统一升级
+- 三个文件必须同步：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+- 升级规则：patch +1（如 `0.0.3` → `0.0.4`），minor/major 由发布决策决定
+
+### PR 流程
+1. 从最新 `beta` 分支创建 `<动作>-<功能>` 分支
+2. 开发完成，推送分支
+3. 创建 PR，**目标分支为 `beta`**（非 `main`）
+4. PR 描述包含：改动摘要、涉及模块/文件、验证方式与结果、已知限制、关联任务编号
+5. CI 通过后合并到 `beta`
+6. 发布时：`beta` → `main` PR，同步升级版本号，合并后打 Tag
+
+### 提交信息
 - 使用 Conventional Commits：`feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:`
 - 提交信息用英文，格式：`type(scope): description`
+- 示例：`feat(timeline): add marker drag-to-create`、`fix(export): handle empty segment list`
+
+### 交付前自检（每次写完代码必须执行）
+1. `cargo check` / `cargo test` 通过
+2. `pnpm build` 通过
+3. `pnpm lint` 通过
+4. 版本号未变更（日常开发不改版本号，仅 beta→main 时改）
 
 ## 验收标准（M1）
 - 项目能正常 `cargo tauri dev` 启动
