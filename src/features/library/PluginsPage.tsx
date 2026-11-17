@@ -1,5 +1,7 @@
 import { Card, CardBody, CardHeader, Button, Badge, Section, Field, Input, Select, SelectItem, Switch } from '@/components/ui';
 import { useEffect, useState } from 'react';
+import { Tab, Tabs } from '@heroui/react';
+import { GitHubPluginDiscovery } from './GitHubPluginDiscovery';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code } from 'lucide-react';
@@ -8,6 +10,8 @@ import { inferParamKind, type PluginParamSchema } from '@/types';
 
 export function PluginsPage() {
   const { settings } = useAppStore();
+  const [activeTab, setActiveTab] = useState<'local' | 'discover'>('local');
+  const [discoveryVisited, setDiscoveryVisited] = useState(false);
   const [plugins, setPlugins] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Record<string, { progress: number; message: string }>>({});
@@ -141,32 +145,16 @@ export function PluginsPage() {
   const selectedVideoId = useAppStore((state) => state.selectedVideoId);
   const selectedVideo = videos.find((v) => v.id === selectedVideoId) || videos[0] || null;
 
-  if (loading) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center justify-between gap-4 px-8 py-6">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">插件管理</h1>
-            <p className="mt-1.5 text-sm text-default-500">
-              通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
-            </p>
-          </div>
-          <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
-            <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
-            重新加载
-          </Button>
-        </header>
-        <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
-          <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-default-400">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              <span className="text-sm">加载插件中…</span>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  const handleTabChange = (key: React.Key) => {
+    if (key !== 'local' && key !== 'discover') return;
+    setActiveTab(key);
+    if (key === 'discover') {
+      setDiscoveryVisited(true);
+    } else {
+      // 安装已由后端注册；返回本地时读取最新列表，不重启正在运行的插件。
+      void loadPlugins();
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -177,71 +165,98 @@ export function PluginsPage() {
             通过 stdio/JSON-RPC 运行的 Sidecar 插件，崩溃不影响主程序。
           </p>
         </div>
-        <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
-          <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
-          重新加载
-        </Button>
+        {activeTab === 'local' && (
+          <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
+            <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
+            重新加载
+          </Button>
+        )}
       </header>
 
-      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <div className="w-full min-w-0 space-y-5 pb-8">
-          {plugins.length === 0 ? (
-            <Section title="未发现插件" description="在 plugins/ 目录或设置的自定义插件目录下放入 plugin.json + 入口文件，点击「重新加载」即可发现。">
-              <div className="flex flex-col items-center gap-3 text-default-400 py-8">
-                <Code className="h-12 w-12 opacity-30" aria-hidden="true" />
-                <p className="text-sm">未发现插件</p>
-              </div>
-            </Section>
-          ) : (
-            <>
-              {plugins.map((plugin) => (
-                <PluginSection
-                  key={plugin.name}
-                  plugin={plugin}
-                  selectedVideo={selectedVideo}
-                  runningTasks={runningTasks}
-                  paramValues={paramValues[plugin.name] ?? {}}
-                  onParamChange={handleParamChange}
-                  onRun={handleRun}
-                  onCancel={handleCancel}
-                  onStop={handleStopPlugin}
-                />
-              ))}
+      <main className="flex min-h-0 flex-1 flex-col">
+        <Tabs
+          aria-label="插件管理导航"
+          selectedKey={activeTab}
+          onSelectionChange={handleTabChange}
+          variant="underlined"
+          destroyInactiveTabPanel={false}
+          classNames={{
+            base: 'px-8',
+            panel: 'min-h-0 flex-1 overflow-hidden p-0 data-[inert=true]:hidden',
+          }}
+        >
+          <Tab key="local" title="本地插件">
+            <div className="scrollbar-thin h-full overflow-y-auto px-8 py-6">
+              <div className="w-full min-w-0 space-y-5 pb-8">
+                {loading ? (
+                  <div className="flex flex-col items-center gap-3 py-16 text-default-400" role="status">
+                    <Loader2 className="h-6 w-6 animate-spin" aria-hidden="true" />
+                    <span className="text-sm">加载插件中…</span>
+                  </div>
+                ) : plugins.length === 0 ? (
+                  <Section title="未发现插件" description="在 plugins/ 目录或设置的自定义插件目录下放入 plugin.json + 入口文件，点击「重新加载」即可发现。">
+                    <div className="flex flex-col items-center gap-3 text-default-400 py-8">
+                      <Code className="h-12 w-12 opacity-30" aria-hidden="true" />
+                      <p className="text-sm">未发现插件</p>
+                    </div>
+                  </Section>
+                ) : (
+                  <>
+                    {plugins.map((plugin) => (
+                      <PluginSection
+                        key={plugin.name}
+                        plugin={plugin}
+                        selectedVideo={selectedVideo}
+                        runningTasks={runningTasks}
+                        paramValues={paramValues[plugin.name] ?? {}}
+                        onParamChange={handleParamChange}
+                        onRun={handleRun}
+                        onCancel={handleCancel}
+                        onStop={handleStopPlugin}
+                      />
+                    ))}
 
-              {/* 运行日志 Section */}
-              {logs.length > 0 && (
-                <Section title="运行日志" description="最近 100 条插件输出">
-                  <Card className="h-64 flex flex-col">
-                    <CardHeader className="flex items-center justify-between p-3">
-                      <h3 className="text-sm font-medium">插件日志</h3>
-                      <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    </CardHeader>
-                    <CardBody className="flex-1 overflow-auto p-3 font-mono text-xs bg-default-50 rounded-lg">
-                      <div className="space-y-1">
-                        {logs.map((log, i) => (
-                          <div
-                            key={i}
-                            className={cn(
-                              'px-2 py-1 rounded',
-                              log.includes('[ERROR]') && 'bg-danger-50 text-danger',
-                              log.includes('[CRASHED]') && 'bg-danger-50 text-danger',
-                              log.includes('[WARN]') && 'bg-warning-50 text-warning',
-                              log.includes('[OK]') && 'bg-success-50 text-success'
-                            )}
-                          >
-                            {log}
-                          </div>
-                        ))}
-                      </div>
-                    </CardBody>
-                  </Card>
-                </Section>
-              )}
-            </>
-          )}
-        </div>
+                    {/* 运行日志 Section */}
+                    {logs.length > 0 && (
+                      <Section title="运行日志" description="最近 100 条插件输出">
+                        <Card className="h-64 flex flex-col">
+                          <CardHeader className="flex items-center justify-between p-3">
+                            <h3 className="text-sm font-medium">插件日志</h3>
+                            <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </Button>
+                          </CardHeader>
+                          <CardBody className="flex-1 overflow-auto p-3 font-mono text-xs bg-default-50 rounded-lg">
+                            <div className="space-y-1">
+                              {logs.map((log, i) => (
+                                <div
+                                  key={i}
+                                  className={cn(
+                                    'px-2 py-1 rounded',
+                                    log.includes('[ERROR]') && 'bg-danger-50 text-danger',
+                                    log.includes('[CRASHED]') && 'bg-danger-50 text-danger',
+                                    log.includes('[WARN]') && 'bg-warning-50 text-warning',
+                                    log.includes('[OK]') && 'bg-success-50 text-success'
+                                  )}
+                                >
+                                  {log}
+                                </div>
+                              ))}
+                            </div>
+                          </CardBody>
+                        </Card>
+                      </Section>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </Tab>
+          <Tab key="discover" title="发现插件">
+            {/* 首次进入才联网；切换标签不卸载，保留限流等待与安装状态。 */}
+            {discoveryVisited && <GitHubPluginDiscovery />}
+          </Tab>
+        </Tabs>
       </main>
     </div>
   );
