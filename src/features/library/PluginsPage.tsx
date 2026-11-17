@@ -666,6 +666,35 @@ function PluginCard({
           </div>
         </CardBody>
       )}
+
+      {plugin.pythonEnvironment && plugin.pythonEnvironment.stage !== 'ready' && (
+        <CardBody className="px-4 pb-4 pt-0">
+          <div className={`rounded-xl border p-3 text-xs ${
+            plugin.pythonEnvironment.stage === 'failed'
+              ? 'border-danger/30 bg-danger/10 text-danger'
+              : plugin.pythonEnvironment.stage === 'absent'
+              ? 'border-divider bg-default-100 text-default-500'
+              : 'border-primary/30 bg-primary/10 text-primary'
+          }`}>
+            <p className="font-medium">
+              Python 环境：
+              {plugin.pythonEnvironment.stage === 'absent' && '未建立（首次运行插件时自动创建）'}
+              {plugin.pythonEnvironment.stage === 'creating-venv' && '正在创建虚拟环境…'}
+              {plugin.pythonEnvironment.stage === 'installing' && '正在安装依赖…'}
+              {plugin.pythonEnvironment.stage === 'failed' && '建置失败'}
+            </p>
+            {plugin.pythonEnvironment.venvDir && (
+              <p className="mt-1 break-all text-[10px] opacity-70">{plugin.pythonEnvironment.venvDir}</p>
+            )}
+            {plugin.pythonEnvironment.pythonVersion && (
+              <p className="mt-1 text-[10px] opacity-70">Python {plugin.pythonEnvironment.pythonVersion}</p>
+            )}
+            {plugin.pythonEnvironment.error && (
+              <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[10px]">{plugin.pythonEnvironment.error}</pre>
+            )}
+          </div>
+        </CardBody>
+      )}
     </Card>
   );
 }

@@ -11,6 +11,7 @@ pub mod manager;
 pub mod manifest;
 pub mod orchestrator;
 pub mod protocol;
+pub mod python_env;
 pub mod recognition;
 pub mod runtime;
 
@@ -21,4 +22,5 @@ pub use orchestrator::{
     PluginRunOutcome, VideoRunSummary,
 };
 pub use protocol::{PluginResult, PROTOCOL_VERSION};
+pub use python_env::{EnvProgressEvent, PluginEnvStatus, PythonEnvError};
 pub use recognition::{RecognitionError, RecognitionProcess};

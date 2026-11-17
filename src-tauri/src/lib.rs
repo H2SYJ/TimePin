@@ -51,6 +51,7 @@ pub fn run() {
             crate::commands::formats::export_segments,
             crate::commands::plugins::get_plugins,
             crate::commands::plugins::reload_plugins,
+            crate::commands::plugins::rebuild_plugin_environments,
             crate::commands::plugins::run_plugin,
             crate::commands::plugins::run_plugins,
             crate::commands::plugins::stop_plugin,

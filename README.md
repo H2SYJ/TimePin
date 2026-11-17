@@ -94,7 +94,7 @@ TimePin 的目标是成为**打标规则可插拔、识别结果跨软件可见�
 - **通信**：Tauri IPC（前端 ↔ Rust）；Rust ↔ Sidecar 用 JSON-RPC/stdio；进度通过 Tauri event 推送到前端。
 - **视频处理**：FFmpeg CLI（流复制导出、抽帧）；OpenCV/ONNX 在 Sidecar 内。
 - **插件底座**：评估 tauron 的插件隔离与 ACL 能力；若不采用，自研基于 Sidecar 的进程级插件管理器。
-- **打包**：Tauri bundler；Sidecar 以外部二进制随包分发；Python 插件可用 PyInstaller 打包或要求用户安装运行时（优先打包）。
+- **打包**：Tauri bundler；Sidecar 以外部二进制随包分发；Python 解释器通过 `bundle.resources` 内嵌分发（`runtime/python/`），用户无需安装系统 Python。插件依赖在各自的隔离 venv 中自动安装。
 
 ## 8. 关键数据流
 

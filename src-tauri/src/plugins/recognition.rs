@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::plugins::protocol::{
@@ -25,6 +26,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum RecognitionError {
     #[error("无法启动识别服务进程：{0}")]
     SpawnFailed(String),
+    #[error("Python 环境准备失败：{0}")]
+    EnvFailed(String),
     #[error("识别服务握手失败：{0}")]
     HandshakeFailed(String),
     #[error("协议不兼容：主程序 {host}，服务 {service}")]
@@ -96,21 +99,29 @@ pub struct RecognitionProcess {
 }
 
 impl RecognitionProcess {
+    /// 启动识别服务进程并完成握手。
+    ///
+    /// `python_interpreter` 必须是已解析的解释器绝对路径——
+    /// 由调用方经 `python_env::ensure_python_environment` 取得
+    /// （共享内嵌解释器或识别插件的 venv）。识别服务与普通插件共用
+    /// 同一套解析器，保证内嵌 Python 分发后不需要系统 PATH。
     pub fn spawn(
         service_dir: &Path,
+        python_interpreter: PathBuf,
         on_notify: Option<NotificationHandler>,
     ) -> Result<Self, RecognitionError> {
         let entry = service_dir.join("main.py");
-        let program = if cfg!(windows) { "python" } else { "python3" };
 
-        let mut child = Command::new(program)
+        let mut child = Command::new(&python_interpreter)
             .arg(entry)
             .current_dir(service_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| RecognitionError::SpawnFailed(format!("{program}: {e}")))?;
+            .map_err(|e| {
+                RecognitionError::SpawnFailed(format!("{}: {e}", python_interpreter.display()))
+            })?;
 
         let stdin = child
             .stdin

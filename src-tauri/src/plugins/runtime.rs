@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 
-use super::manifest::PluginManifest;
+use super::manifest::{PluginManifest, PluginRuntime};
 use super::protocol::{
     PluginNotification, PluginResult, RpcError, RpcRequest, RpcResponse, PROTOCOL_VERSION,
 };
@@ -60,7 +60,8 @@ pub type NotificationHandler = Arc<dyn Fn(PluginNotification) + Send + Sync>;
 ///
 /// 仅在 `run` 调用期间生效（`run_with_services` 注入），
 /// 返回 `(code, message)` 错误或 result 值。
-pub type HostRequestHandler = Arc<dyn Fn(&RpcRequest) -> Result<serde_json::Value, (i32, String)> + Send + Sync>;
+pub type HostRequestHandler =
+    Arc<dyn Fn(&RpcRequest) -> Result<serde_json::Value, (i32, String)> + Send + Sync>;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -86,24 +87,34 @@ impl PluginProcess {
     /// 构建启动命令：根据 manifest.runtime 与 entry 决定可执行文件与参数。
     ///
     /// - `binary`：entry 即二进制文件
-    /// - `python`：`python <entry>`（解释器从 `python`/`python3` PATH 解析）
+    /// - `python`：`<interpreter> <entry>`，`interpreter` 由调用方经
+    ///   `python_env::ensure_python_environment` 解析为绝对路径
     /// - `node`：`node <entry>`
     /// - `rust`：按 binary 处理（Rust 插件编译为独立可执行文件）
-    pub fn command(&self) -> (PathBuf, Vec<String>) {
-        let entry = self.plugin_dir.join(&self.manifest.entry);
-        match self.manifest.runtime {
-            super::manifest::PluginRuntime::Python => (
-                PathBuf::from(python_binary()),
-                vec![entry.to_string_lossy().to_string()],
-            ),
-            super::manifest::PluginRuntime::Node => (
+    pub fn command(&self, python_interpreter: Option<&Path>) -> (PathBuf, Vec<String>) {
+        Self::build_command(&self.manifest, &self.plugin_dir, python_interpreter)
+    }
+
+    fn build_command(
+        manifest: &PluginManifest,
+        plugin_dir: &Path,
+        python_interpreter: Option<&Path>,
+    ) -> (PathBuf, Vec<String>) {
+        let entry = plugin_dir.join(&manifest.entry);
+        match manifest.runtime {
+            PluginRuntime::Python => {
+                let program = python_interpreter
+                    .map(PathBuf::from)
+                    .expect("python_interpreter required for Python runtime");
+                (program, vec![entry.to_string_lossy().to_string()])
+            }
+            PluginRuntime::Node => (
                 PathBuf::from("node"),
                 vec![entry.to_string_lossy().to_string()],
             ),
-            super::manifest::PluginRuntime::Rust | super::manifest::PluginRuntime::Binary => {
+            PluginRuntime::Rust | PluginRuntime::Binary => {
                 #[cfg(windows)]
                 let entry = {
-                    // Windows 上 entry 可能没有 .exe 后缀
                     if entry.extension().is_none() {
                         entry.with_extension("exe")
                     } else {
@@ -116,34 +127,17 @@ impl PluginProcess {
     }
 
     /// 启动插件进程并完成协议握手。
+    ///
+    /// `python_interpreter`：Python runtime 插件必须传入已解析的解释器
+    /// 绝对路径（共享解释器或插件 venv 内的 python）。其他 runtime 传 `None`。
     pub fn spawn(
         manifest: PluginManifest,
         plugin_dir: &Path,
+        python_interpreter: Option<&Path>,
         on_notify: Option<NotificationHandler>,
     ) -> Result<Self, PluginProcessError> {
         let plugin_dir = plugin_dir.to_path_buf();
-        let (program, args) = {
-            let entry = plugin_dir.join(&manifest.entry);
-            match manifest.runtime {
-                super::manifest::PluginRuntime::Python => (
-                    PathBuf::from(python_binary()),
-                    vec![entry.to_string_lossy().to_string()],
-                ),
-                super::manifest::PluginRuntime::Node => (
-                    PathBuf::from("node"),
-                    vec![entry.to_string_lossy().to_string()],
-                ),
-                super::manifest::PluginRuntime::Rust | super::manifest::PluginRuntime::Binary => {
-                    #[cfg(windows)]
-                    let entry = if entry.extension().is_none() {
-                        entry.with_extension("exe")
-                    } else {
-                        entry.clone()
-                    };
-                    (entry, Vec::new())
-                }
-            }
-        };
+        let (program, args) = Self::build_command(&manifest, &plugin_dir, python_interpreter);
 
         let mut child = Command::new(&program)
             .args(&args)
@@ -234,8 +228,7 @@ impl PluginProcess {
         handler: Option<HostRequestHandler>,
     ) -> Result<PluginResult, PluginProcessError> {
         self.host_service_handler = handler;
-        let result =
-            self.call_with_timeout("run", params, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT));
+        let result = self.call_with_timeout("run", params, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT));
         self.host_service_handler = None;
         let result = result?;
         serde_json::from_value(result)
@@ -459,15 +452,6 @@ enum Incoming {
     Request(RpcRequest),
     Response(RpcResponse),
     Notification(PluginNotification),
-}
-
-/// Windows 下 `python` 优先，其次 `python3`；Unix 下 `python3` 优先。
-fn python_binary() -> &'static str {
-    if cfg!(windows) {
-        "python"
-    } else {
-        "python3"
-    }
 }
 
 /// 协议兼容性：major 相同即兼容；任一 major 为 0 时要求完全一致。

@@ -414,10 +414,7 @@ fn parse_elst(file: &mut File, header: &BoxHeader) -> Result<Vec<ElstEntry>, Str
     let mut entries = Vec::with_capacity(entry_count as usize);
     for _ in 0..entry_count {
         let (segment_duration, media_time) = if version == 1 {
-            (
-                read_u64(file, pos)?,
-                read_u64(file, pos + 8)? as i64,
-            )
+            (read_u64(file, pos)?, read_u64(file, pos + 8)? as i64)
         } else {
             (
                 u64::from(read_u32(file, pos)?),
@@ -480,11 +477,7 @@ fn build_index(_file: &mut File, track: &TrackData) -> Result<VideoIndex, String
 
     // 3. elst 偏移（media_time 起始点；elst[0].media_time 表示首个 sample 在该时刻播放）
     //    对常见录制文件 elst 为空或 media_time=0；若非零则从每个 pts 减去。
-    let elst_offset_units: i64 = track
-        .elst
-        .first()
-        .map(|e| e.media_time)
-        .unwrap_or(0);
+    let elst_offset_units: i64 = track.elst.first().map(|e| e.media_time).unwrap_or(0);
 
     // 4. 展开 stsc + stco → 每 sample 的 (chunk_index, offset_in_chunk)
     //    stsc 按 chunk 分组；first_chunk 从 1 开始
@@ -563,7 +556,11 @@ fn build_index(_file: &mut File, track: &TrackData) -> Result<VideoIndex, String
             size: track.stsz[idx],
         });
     }
-    keyframes.sort_by(|a, b| a.pts_sec.partial_cmp(&b.pts_sec).unwrap_or(std::cmp::Ordering::Equal));
+    keyframes.sort_by(|a, b| {
+        a.pts_sec
+            .partial_cmp(&b.pts_sec)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(VideoIndex {
         stream_index: 0,
@@ -630,9 +627,7 @@ fn read_box_header(file: &mut File, offset: u64) -> Result<BoxHeader, String> {
         s => (u64::from(s), 8u64),
     };
     if size < header_len {
-        return Err(format!(
-            "box @{offset} size {size} < header {header_len}"
-        ));
+        return Err(format!("box @{offset} size {size} < header {header_len}"));
     }
     Ok(BoxHeader {
         size,

@@ -31,6 +31,10 @@ export interface Settings {
   theme: Theme;
   hardwareAcceleration: boolean;
   customPluginDirs: string[];
+  /** 用户显式配置的 Python 解释器绝对路径（优先于内嵌运行时） */
+  pythonPath: string | null;
+  /** 是否允许回退到系统 PATH 中的 python/python3 */
+  useSystemPython: boolean;
   recentFiles: string[];
   windowState: WindowState | null;
 }
@@ -157,6 +161,10 @@ export interface PluginManifest {
   capabilities: string[];
   parametersSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
+  /** Python 版本约束（仅 runtime=python），如 `">=3.10,<3.13"`、`"3.11.*"` */
+  python?: string | null;
+  /** pip 依赖（仅 runtime=python），自动建 venv 安装 */
+  dependencies?: string[];
 }
 
 export interface PluginParameterSchema {
@@ -167,6 +175,14 @@ export interface PluginParameterSchema {
 }
 
 export type PluginParametersSchema = Record<string, PluginParameterSchema>;
+
+export interface PluginEnvStatus {
+  /** absent=未建 / ready=可用 / failed=建置失败 / creating-venv / installing */
+  stage: 'absent' | 'ready' | 'failed' | 'creating-venv' | 'installing';
+  venvDir: string;
+  pythonVersion: string | null;
+  error: string | null;
+}
 
 export interface PluginInfo {
   name: string;
@@ -179,6 +195,24 @@ export interface PluginInfo {
   dir: string;
   status: 'ready' | 'invalid' | 'crashed' | 'running';
   statusDetail: string | null;
+  /** Python 插件的 venv 状态；非 Python 插件为 null */
+  pythonEnvironment?: PluginEnvStatus | null;
+}
+
+/** `plugin://env-progress` 事件的 payload：venv 建置进度 */
+export interface PluginEnvProgress {
+  schemaVersion: string;
+  pluginName: string;
+  stage: 'creating-venv' | 'installing' | 'ready' | 'failed';
+  message: string;
+  error: string | null;
+}
+
+/** `rebuild_plugin_environments` 命令的单插件结果 */
+export interface EnvRebuildResult {
+  name: string;
+  venvDir: string | null;
+  error: string | null;
 }
 
 export interface PluginRunParams {

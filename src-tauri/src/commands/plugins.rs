@@ -17,8 +17,12 @@ pub fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-pub async fn get_plugins(manager: State<'_, PluginManager>) -> Result<Vec<PluginInfo>, String> {
-    Ok(manager.list())
+pub async fn get_plugins(
+    app_handle: AppHandle,
+    manager: State<'_, PluginManager>,
+) -> Result<Vec<PluginInfo>, String> {
+    let settings = crate::core::settings::load_settings(&app_handle).ok();
+    Ok(manager.list(settings.as_ref()))
 }
 
 /// 只允许打开已保存的自定义搜索根，或应用自有的默认目录。
@@ -95,7 +99,7 @@ fn open_directory(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 重新扫描插件目录（热重载）：停掉全部进程、重新发现。
+/// 重新扫描插件目录（热重载）：停掉全部进程、重新发现、清理孤儿环境。
 #[tauri::command]
 pub async fn reload_plugins(
     app_handle: AppHandle,
@@ -103,12 +107,48 @@ pub async fn reload_plugins(
 ) -> Result<Vec<PluginInfo>, String> {
     let dirs = plugin_dirs(&app_handle);
     let manager = manager.inner().clone();
+    let app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
         manager.reload(&dirs);
-        manager.list()
+        let settings = crate::core::settings::load_settings(&app).ok();
+        manager.list(settings.as_ref())
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// 单插件环境建置结果（供前端展示）
+#[derive(serde::Serialize)]
+pub struct EnvRebuildResult {
+    pub name: String,
+    pub venv_dir: Option<String>,
+    pub error: Option<String>,
+}
+
+/// 重建所有 Python 插件的虚拟环境（设置页「重建所有插件环境」按钮）。
+/// 单插件失败不影响其他；返回每个插件的建置结果。
+#[tauri::command]
+pub async fn rebuild_plugin_environments(
+    app_handle: AppHandle,
+    manager: State<'_, PluginManager>,
+) -> Result<Vec<EnvRebuildResult>, String> {
+    let manager = manager.inner().clone();
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings =
+            crate::core::settings::load_settings(&app).map_err(|e| format!("读取设置失败：{e}"))?;
+        let results = manager.rebuild_environments(&settings);
+        Ok(results
+            .into_iter()
+            .map(|(name, r)| EnvRebuildResult {
+                name,
+                venv_dir: r.as_ref().ok().map(|p| p.to_string_lossy().to_string()),
+                error: r.err(),
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 在指定视频上运行插件。

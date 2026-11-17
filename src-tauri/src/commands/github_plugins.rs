@@ -60,6 +60,12 @@ pub struct PluginManifest {
     pub parameters_schema: serde_json::Value,
     #[serde(default)]
     pub output_schema: serde_json::Value,
+    /// Python 解释器约束（可选，仅 runtime=python 生效）
+    #[serde(default)]
+    pub python: Option<String>,
+    /// pip 依赖列表（可选，仅 runtime=python 生效）
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 impl PluginManifest {
@@ -104,6 +110,8 @@ impl PluginManifest {
             parameters_schema: serde_json::from_value(self.parameters_schema.clone())
                 .unwrap_or_default(),
             output_schema: serde_json::from_value(self.output_schema.clone()).unwrap_or_default(),
+            python: self.python.clone(),
+            dependencies: self.dependencies.clone(),
         })
     }
 }

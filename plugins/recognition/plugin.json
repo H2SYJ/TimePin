@@ -6,6 +6,13 @@
   "author": "TimePin Team",
   "entry": "main.py",
   "runtime": "python",
+  "python": ">=3.10",
+  "dependencies": [
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "onnxruntime>=1.16.0",
+    "Pillow>=10.0.0"
+  ],
   "capabilities": ["videoFrames", "fileWrite", "gpu", "network"],
   "parametersSchema": {
     "ocr": {

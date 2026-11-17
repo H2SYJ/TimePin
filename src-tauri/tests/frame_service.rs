@@ -27,8 +27,8 @@ fn make_service() -> (FrameService, TempDir) {
     let ffmpeg = env::var("TIMEPIN_TEST_FFMPEG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("ffmpeg"));
-    let service = FrameService::new(ffmpeg, video_path, output_dir)
-        .expect("构造 FrameService 失败");
+    let service =
+        FrameService::new(ffmpeg, video_path, output_dir).expect("构造 FrameService 失败");
     (service, tmp)
 }
 
@@ -180,10 +180,8 @@ fn mp4_index_parses_minimal_file() {
     let mp4_path = tmp.path().join("minimal.mp4");
     // ftyp box: size=24, type=ftyp, major=isom, minor=0, brands=[isom, mp41]
     let ftyp: &[u8] = &[
-        0, 0, 0, 24, b'f', b't', b'y', b'p',
-        b'i', b's', b'o', b'm',
-        0, 0, 0, 0,
-        b'i', b's', b'o', b'm', b'm', b'p', b'4', b'1',
+        0, 0, 0, 24, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 0, 0, b'i', b's', b'o',
+        b'm', b'm', b'p', b'4', b'1',
     ];
     // moov box: 空 trak（无有效数据，read_index 应返回错误而非 panic）
     let trak_inner: &[u8] = &[];
@@ -212,8 +210,14 @@ fn real_ffmpeg_extracts_image2_frames() {
     let video_path = tmp.path().join("test.mp4");
     let status = std::process::Command::new(&ffmpeg)
         .args([
-            "-f", "lavfi", "-i", "testsrc=duration=5:size=320x240:rate=30",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=5:size=320x240:rate=30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
             video_path.to_str().unwrap(),
         ])
         .status()
@@ -222,8 +226,12 @@ fn real_ffmpeg_extracts_image2_frames() {
 
     let output_dir = tmp.path().join("out");
     fs::create_dir_all(&output_dir).unwrap();
-    let service = FrameService::new(PathBuf::from(&ffmpeg), video_path.clone(), output_dir.clone())
-        .unwrap();
+    let service = FrameService::new(
+        PathBuf::from(&ffmpeg),
+        video_path.clone(),
+        output_dir.clone(),
+    )
+    .unwrap();
     let req = FrameExtractRequest {
         protocol_version: "1.0.0".into(),
         video_path,
@@ -257,8 +265,16 @@ fn real_ffmpeg_extracts_keyframes() {
     // 生成带关键帧的视频（每 1 秒一个关键帧）
     let status = std::process::Command::new(&ffmpeg)
         .args([
-            "-f", "lavfi", "-i", "testsrc=duration=5:size=320x240:rate=30",
-            "-c:v", "libx264", "-g", "30", "-pix_fmt", "yuv420p",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=5:size=320x240:rate=30",
+            "-c:v",
+            "libx264",
+            "-g",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
             video_path.to_str().unwrap(),
         ])
         .status()
@@ -267,8 +283,12 @@ fn real_ffmpeg_extracts_keyframes() {
 
     let output_dir = tmp.path().join("out");
     fs::create_dir_all(&output_dir).unwrap();
-    let service = FrameService::new(PathBuf::from(&ffmpeg), video_path.clone(), output_dir.clone())
-        .unwrap();
+    let service = FrameService::new(
+        PathBuf::from(&ffmpeg),
+        video_path.clone(),
+        output_dir.clone(),
+    )
+    .unwrap();
     let req = FrameExtractRequest {
         protocol_version: "1.0.0".into(),
         video_path,
@@ -299,8 +319,14 @@ fn real_ffmpeg_base64_delivery_bounded() {
     let video_path = tmp.path().join("test.mp4");
     let status = std::process::Command::new(&ffmpeg)
         .args([
-            "-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=10",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=2:size=160x120:rate=10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
             video_path.to_str().unwrap(),
         ])
         .status()
@@ -309,8 +335,12 @@ fn real_ffmpeg_base64_delivery_bounded() {
 
     let output_dir = tmp.path().join("out");
     fs::create_dir_all(&output_dir).unwrap();
-    let service = FrameService::new(PathBuf::from(&ffmpeg), video_path.clone(), output_dir.clone())
-        .unwrap();
+    let service = FrameService::new(
+        PathBuf::from(&ffmpeg),
+        video_path.clone(),
+        output_dir.clone(),
+    )
+    .unwrap();
     let req = FrameExtractRequest {
         protocol_version: "1.0.0".into(),
         video_path,
@@ -329,7 +359,7 @@ fn real_ffmpeg_base64_delivery_bounded() {
         assert!(frame.path.is_none());
         let b64 = frame.image_base64.as_ref().unwrap();
         assert!(b64.len() <= 8 * 1024 * 1024); // 单帧上限
-        // 可以解码为图像（PNG/JPEG magic bytes）
+                                               // 可以解码为图像（PNG/JPEG magic bytes）
         let bytes = general_purpose::STANDARD.decode(b64).unwrap();
         assert!(bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"\xFF\xD8"));
     }
