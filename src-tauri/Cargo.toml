@@ -1,6 +1,6 @@
 [package]
 name = "timepin"
-version = "0.0.3"
+version = "0.0.4"
 description = "TimePin - 视频时间轴标注工作台"
 authors = ["TimePin Team"]
 license = "MIT"
@@ -15,7 +15,7 @@ name = "timepin_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2" }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 serde_json = "1.0"

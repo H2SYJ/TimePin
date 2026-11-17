@@ -135,3 +135,97 @@ TimePin 的目标是成为**打标规则可插拔、识别结果跨软件可见�
 - `video.txt` 与 `video.csv` 生成器及格式校验。
 - 片段导出队列与进度反馈。
 - 项目 README、架构说明、插件开发指南。
+
+---
+
+## 13. 开发快速看效果指南
+
+### 13.1 三种运行模式对比
+
+| 模式 | 命令 | 启动速度 | 热重载 | 适用场景 |
+|------|------|----------|--------|----------|
+| **前端热重载开发** | `pnpm dev` | ~3 秒 | ✅ 毫秒级 (React Fast Refresh) | 纯 UI 调整、组件开发、样式调试、页面布局 |
+| **Tauri 开发模式** | `pnpm tauri dev` | ~30-60 秒 | 前端 ✅ / Rust 需重编译 | 全栈联调、IPC 测试、插件系统调试、原生 API 验证 |
+| **Debug 可执行文件** | `src-tauri/target/debug/timepin.exe` | ~1 秒 | ❌ 无 | 快速验证构建产物、演示、集成测试、Rust 逻辑验证 |
+
+### 13.2 推荐日常开发流程
+
+```bash
+# 终端 1：启动前端热重载（主力开发，90% 场景）
+pnpm dev
+# → 浏览器打开 http://localhost:5173
+# → 保存代码自动热更新，保持交互状态不丢失
+
+# 终端 2：需要 Rust 改动时，增量编译 + 运行
+cd src-tauri && cargo build  # 增量编译约 5-15 秒
+../src-tauri/target/debug/timepin.exe
+```
+
+### 13.3 关键文件修改后的生效方式
+
+| 文件类型 | 示例路径 | 生效方式 |
+|----------|----------|----------|
+| **前端组件/页面/Hooks** | `src/features/**/*.tsx` | `pnpm dev` 自动热重载 |
+| **样式** | `src/**/*.css`, `tailwind.config.js` | `pnpm dev` 自动热重载 |
+| **类型定义** | `src/types/index.ts` | `pnpm dev` 自动重载 (可能需重启 TS 服务) |
+| **Rust 核心逻辑/命令/IPC** | `src-tauri/src/**/*.rs` | `cargo build` + 重启 `timepin.exe` |
+| **Rust 依赖** | `src-tauri/Cargo.toml` | `cargo build` (首次较慢，后续增量) |
+| **Tauri 配置** | `src-tauri/tauri.conf.json` | `cargo build` + 重启 `timepin.exe` |
+
+### 13.4 常用调试命令速查
+
+```bash
+# ===== 前端 =====
+pnpm dev                    # 启动 Vite 开发服务器 (http://localhost:5173)
+pnpm build                  # 生产构建检查 (tsc + vite build)
+pnpm test                   # 运行前端单元测试
+pnpm lint                   # ESLint 检查
+pnpm format                 # Prettier 格式化
+
+# ===== Rust 后端 =====
+cd src-tauri
+cargo check                 # 快速类型检查 (不生成二进制，最快)
+cargo build                 # Debug 构建 (增量编译快)
+cargo build --release       # Release 构建 (优化后，用于性能测试)
+cargo test                  # 运行 Rust 单元/集成测试
+cargo tauri dev             # Tauri 全栈开发模式 (前端热重载 + Rust)
+cargo tauri build           # 生成安装包
+
+# ===== 完整应用运行 =====
+./src-tauri/target/debug/timepin.exe      # Debug 版本 (含调试符号)
+./src-tauri/target/release/timepin.exe    # Release 版本 (最优性能)
+
+# ===== 清理缓存 =====
+cargo clean                 # 清理 Rust 构建缓存
+pnpm store prune            # 清理 pnpm 存储缓存
+rm -rf node_modules dist    # 清理前端依赖和构建产物
+```
+
+### 13.5 调试技巧
+
+| 场景 | 方法 |
+|------|------|
+| **看 UI 变化** | `pnpm dev` + 浏览器 `http://localhost:5173`，保存即刷新 |
+| **调试前端逻辑** | 浏览器 F12 开发者工具 → Console/Sources/React DevTools |
+| **调试 IPC/后端逻辑** | `pnpm tauri dev` 或运行 `timepin.exe`，F12 查看 Console 与 Network |
+| **调试 Rust 代码** | VS Code 安装 `rust-analyzer` + `CodeLLDB`，Attach 到 `timepin.exe` 进程断点调试 |
+| **查看 Rust 日志** | 终端直接显示 `println!`/`log::info!` 输出；或设置 `RUST_LOG=debug` |
+| **验证构建产物** | `pnpm tauri build` 生成 `src-tauri/target/release/bundle/` 下的安装包 |
+
+### 13.6 端口冲突处理
+
+```bash
+# 如果遇到 "Port 5173 is already in use"
+# Windows:
+netstat -ano | findstr 5173
+taskkill /PID <PID> /F
+
+# Linux/macOS:
+lsof -i :5173
+kill -9 <PID>
+```
+
+---
+
+> 💡 **核心原则**：90% 的 UI 开发只需 `pnpm dev` + 浏览器，保存即刷新，毫秒级反馈。  
+> 只有涉及 **Rust 侧逻辑（IPC、文件操作、插件管理、FFmpeg 调用）** 时才需要 `cargo build` + 运行 `timepin.exe`。
