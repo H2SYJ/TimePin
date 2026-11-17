@@ -1,3 +1,4 @@
+pub mod dependencies;
 pub mod formats;
 pub mod library;
 pub mod marks;

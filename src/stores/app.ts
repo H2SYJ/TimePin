@@ -8,6 +8,7 @@ type Page = 'library' | 'marks' | 'plugins' | 'settings';
 const defaultSettings: Settings = {
   importDirectory: null,
   ffmpegPath: null,
+  ffprobePath: null,
   thumbnailQuality: 80,
   thumbnailMaxDimension: 320,
   maxConcurrentImports: 3,
@@ -41,6 +42,7 @@ interface AppState {
   importPaths: (paths: string[]) => Promise<void>;
   deleteVideo: (id: string) => Promise<void>;
   updateSettings: (settings: Settings) => Promise<boolean>;
+  mergeInstalledToolPaths: (paths: Pick<Settings, 'ffmpegPath' | 'ffprobePath'>) => void;
   clearNotice: () => void;
   clearError: () => void;
 }
@@ -155,7 +157,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   async updateSettings(settings) {
-    set({ error: null });
+    set({ error: null, notice: null });
     try {
       await api.saveSettings(settings);
       applyTheme(settings.theme);
@@ -165,6 +167,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ error: String(error) });
       return false;
     }
+  },
+
+  // 安装命令已在后端持久化。这里只合并返回的两个字段，绝不覆盖其它设置。
+  mergeInstalledToolPaths(paths) {
+    set((state) => ({ settings: { ...state.settings, ffmpegPath: paths.ffmpegPath, ffprobePath: paths.ffprobePath } }));
   },
 
   clearNotice() {

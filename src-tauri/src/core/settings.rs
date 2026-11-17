@@ -1,6 +1,7 @@
 use crate::core::get_app_data_dir;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8,8 +9,10 @@ use tauri::AppHandle;
 pub struct Settings {
     /// 视频导入目录
     pub import_directory: Option<PathBuf>,
-    /// FFmpeg 路径（可选，自动检测）
+    /// FFmpeg 路径（可选，自动检测；可为可执行文件或其所在 bin 目录）
     pub ffmpeg_path: Option<PathBuf>,
+    /// FFprobe 路径（可选，显式配置优先于从 ffmpegPath 推导）
+    pub ffprobe_path: Option<PathBuf>,
     /// 缩略图生成质量 (1-100)
     pub thumbnail_quality: u8,
     /// 缩略图最大尺寸
@@ -69,6 +72,7 @@ impl Default for Settings {
         Self {
             import_directory: None,
             ffmpeg_path: None,
+            ffprobe_path: None,
             thumbnail_quality: 80,
             thumbnail_max_dimension: 320,
             max_concurrent_imports: 3,
@@ -104,9 +108,35 @@ impl Settings {
                 return Err("窗口尺寸无效".to_string());
             }
         }
+        validate_tool_path("ffmpegPath", self.ffmpeg_path.as_ref())?;
+        validate_tool_path("ffprobePath", self.ffprobe_path.as_ref())?;
+        for dir in &self.custom_plugin_dirs {
+            if !dir.is_absolute() {
+                return Err(format!("自定义插件目录必须是绝对路径：{}", dir.display()));
+            }
+            if !dir.is_dir() {
+                return Err(format!("自定义插件目录不存在或不是目录：{}", dir.display()));
+            }
+        }
         Ok(())
     }
 }
+
+fn validate_tool_path(field: &str, path: Option<&PathBuf>) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if !path.is_absolute() {
+        return Err(format!("{field} 必须是绝对路径：{}", path.display()));
+    }
+    if path.as_os_str().is_empty() {
+        return Err(format!("{field} 不能为空路径"));
+    }
+    Ok(())
+}
+
+/// 设置文件写锁：串行化 save/update，避免设置文件被并行写丢字段。
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
 const SETTINGS_FILE: &str = "settings.json";
 
@@ -115,8 +145,15 @@ fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
     get_app_data_dir(app_handle).join(SETTINGS_FILE)
 }
 
+fn settings_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+    SETTINGS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 初始化设置模块
 pub fn init(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = settings_lock_guard();
     let settings_path = get_settings_path(app_handle);
     if !settings_path.exists() {
         let default_settings = Settings::default();
@@ -145,9 +182,34 @@ fn save_settings_internal(
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content = serde_json::to_string_pretty(settings)?;
-    std::fs::write(settings_path, content)?;
-    Ok(())
+    write_settings_file(&settings_path, settings)
+}
+
+fn write_settings_file(
+    settings_path: &Path,
+    settings: &Settings,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let temporary_path = settings_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let content = serde_json::to_vec_pretty(settings)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)?;
+        file.write_all(&content)?;
+        file.sync_all()?;
+        drop(file);
+        // rename replaces the destination atomically, including on Windows.
+        // Never remove the old configuration on failure.
+        std::fs::rename(&temporary_path, settings_path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result
 }
 
 /// 保存设置（对外暴露）
@@ -155,10 +217,32 @@ pub fn save_settings(
     app_handle: &AppHandle,
     settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    save_settings_with_plugin_dirs(app_handle, settings, |_| {})
+}
+
+/// Save and reconcile changed plugin roots under the same write lock, so concurrent
+/// saves cannot leave discovery using older roots than the persisted settings.
+/// The callback must not write settings again while this lock is held.
+pub fn save_settings_with_plugin_dirs<F>(
+    app_handle: &AppHandle,
+    settings: Settings,
+    on_plugin_dirs_changed: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&[PathBuf]),
+{
+    let _guard = settings_lock_guard();
     settings
         .validate()
         .map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
-    save_settings_internal(app_handle, &settings)
+    let custom_dirs_changed = load_settings(app_handle)
+        .map(|previous| previous.custom_plugin_dirs != settings.custom_plugin_dirs)
+        .unwrap_or(true);
+    save_settings_internal(app_handle, &settings)?;
+    if custom_dirs_changed {
+        on_plugin_dirs_changed(&settings.custom_plugin_dirs);
+    }
+    Ok(())
 }
 
 /// 更新部分配置
@@ -169,6 +253,7 @@ pub fn update_settings<F>(
 where
     F: FnOnce(&mut Settings),
 {
+    let _guard = settings_lock_guard();
     let mut settings = load_settings(app_handle)?;
     updater(&mut settings);
     settings
@@ -191,4 +276,82 @@ pub fn add_recent_file(
         }
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_migrate_with_optional_ffprobe_and_preserve_fields() {
+        let old = r#"{"language":"en-US","thumbnailQuality":92,"customPluginDirs":[]}"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert!(settings.ffprobe_path.is_none());
+        assert!(settings.ffmpeg_path.is_none());
+        assert_eq!(settings.language, "en-US");
+        assert_eq!(settings.thumbnail_quality, 92);
+        assert_eq!(settings.thumbnail_max_dimension, 320);
+        let value = serde_json::to_value(&settings).unwrap();
+        assert!(value.get("ffprobePath").unwrap().is_null());
+        assert!(value.get("ffprobe_path").is_none());
+        let defaults: Settings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.validate().is_ok());
+    }
+
+    #[test]
+    fn validates_absolute_existing_plugin_roots_and_restore_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let mut settings = Settings {
+            custom_plugin_dirs: vec![dir.path().to_path_buf(), second.path().to_path_buf()],
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_ok());
+        settings.custom_plugin_dirs = vec![PathBuf::from("relative/plugins")];
+        assert!(settings.validate().is_err());
+        settings.custom_plugin_dirs = vec![dir.path().join("missing")];
+        assert!(settings.validate().is_err());
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"file").unwrap();
+        settings.custom_plugin_dirs = vec![file];
+        assert!(settings.validate().is_err());
+        settings.custom_plugin_dirs.clear();
+        assert!(settings.validate().is_ok());
+        assert!(dir.path().is_dir());
+        assert!(second.path().is_dir());
+    }
+
+    #[test]
+    fn tool_paths_require_absolute_paths() {
+        let mut settings = Settings {
+            ffmpeg_path: Some(PathBuf::from("ffmpeg")),
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.ffmpeg_path = None;
+        settings.ffprobe_path = Some(PathBuf::from("ffprobe"));
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn atomic_settings_file_replaces_existing_and_cleans_failed_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut settings = Settings::default();
+        write_settings_file(&path, &settings).unwrap();
+        settings.language = "en-US".to_string();
+        write_settings_file(&path, &settings).unwrap();
+        let loaded: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded.language, "en-US");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        // A destination directory cannot be replaced; keep it and remove only the temporary file.
+        let blocked = dir.path().join("blocked.json");
+        std::fs::create_dir(&blocked).unwrap();
+        let original = blocked.join("existing-data");
+        std::fs::write(&original, b"preserve").unwrap();
+        assert!(write_settings_file(&blocked, &settings).is_err());
+        assert_eq!(std::fs::read(original).unwrap(), b"preserve");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 }

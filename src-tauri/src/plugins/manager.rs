@@ -190,6 +190,15 @@ impl PluginManager {
         dirs
     }
 
+    /// The app-owned user directory is always searched, even with custom roots.
+    pub fn plugin_dirs(app: &AppHandle, custom_dirs: &[PathBuf]) -> Vec<PathBuf> {
+        merge_plugin_dirs(
+            Self::builtin_plugin_dirs(app),
+            crate::core::get_default_plugins_dir(app),
+            custom_dirs,
+        )
+    }
+
     /// 列出全部插件（含 invalid/crashed 状态）
     pub fn list(&self) -> Vec<PluginInfo> {
         let plugins = self.plugins.lock().expect("plugins mutex poisoned");
@@ -510,4 +519,50 @@ pub fn merge_marks(marks: Vec<Mark>, epsilon: f64) -> Vec<Mark> {
 /// 序列化版本常量（供插件 manifest 默认）
 pub const fn protocol_version() -> &'static str {
     PROTOCOL_VERSION
+}
+
+fn merge_plugin_dirs(
+    mut builtin_dirs: Vec<PathBuf>,
+    default_dir: PathBuf,
+    custom_dirs: &[PathBuf],
+) -> Vec<PathBuf> {
+    builtin_dirs.push(default_dir);
+    builtin_dirs.extend_from_slice(custom_dirs);
+    let mut unique = Vec::new();
+    for dir in builtin_dirs {
+        if !unique.contains(&dir) {
+            unique.push(dir);
+        }
+    }
+    unique
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_builtin_and_default_roots_with_multiple_custom_directories() {
+        let builtin = PathBuf::from("builtin");
+        let default = PathBuf::from("app-data/plugins");
+        let first = PathBuf::from("custom-first");
+        let second = PathBuf::from("custom-second");
+        assert_eq!(
+            merge_plugin_dirs(
+                vec![builtin.clone()],
+                default.clone(),
+                &[
+                    first.clone(),
+                    default.clone(),
+                    second.clone(),
+                    first.clone()
+                ],
+            ),
+            vec![builtin.clone(), default.clone(), first, second],
+        );
+        assert_eq!(
+            merge_plugin_dirs(vec![builtin.clone()], default.clone(), &[]),
+            vec![builtin, default],
+        );
+    }
 }
