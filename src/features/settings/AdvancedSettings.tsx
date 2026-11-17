@@ -153,9 +153,9 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
       <div className="space-y-6">
         <section aria-labelledby="plugin-directories-title" className="space-y-4">
           <h3 id="plugin-directories-title" className="text-sm font-semibold">插件目录</h3>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
             <Input label="默认用户插件目录（始终搜索）" value={info?.defaultPluginDirectory ?? ''} placeholder={desktop ? '正在读取应用目录…' : '请在桌面应用中查看'} isReadOnly />
-            <Button variant="secondary" isDisabled={!desktop || !info || busy} onPress={() => void perform(() => api.openPluginDirectory(null))}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开默认目录</Button>
+            <Button variant="secondary" className="sm:mt-6" isDisabled={!desktop || !info || busy} onPress={() => void perform(() => api.openPluginDirectory(null))}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开默认目录</Button>
           </div>
           <p className="text-xs text-default-500">内置插件和默认用户目录始终参与搜索。以下每一项都是额外的插件搜索根目录，必须是已存在的绝对目录。</p>
           {draft.customPluginDirs.length === 0 && <p className="text-sm text-default-500">未配置额外搜索目录，使用默认目录。</p>}
@@ -165,7 +165,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
               return (
                 <div key={index} className="flex flex-col gap-2 rounded-lg border border-divider p-3 sm:flex-row sm:items-start">
                   <Input id={`plugin-${index}`} label={`插件搜索目录 ${index + 1}`} value={directory} placeholder="绝对目录路径" isDisabled={busy} isInvalid={Boolean(errors[`plugin-${index}`])} errorMessage={errors[`plugin-${index}`]} onValueChange={(value) => patch('customPluginDirs', draft.customPluginDirs.map((path, i) => i === index ? value : path))} />
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 sm:mt-6">
                     <Button variant="secondary" isDisabled={!desktop || busy} aria-label={`浏览插件目录 ${index + 1}`} onPress={() => void browseDirectory(index)}>浏览</Button>
                     <Button variant="secondary" isDisabled={!desktop || busy || !saved} aria-label={`打开插件目录 ${index + 1}`} title={saved ? '打开已保存的目录' : '请先保存该目录'} onPress={() => void perform(() => api.openPluginDirectory(index))}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开</Button>
                     <Button variant="danger" size="icon" isDisabled={busy} aria-label={`移除插件目录 ${index + 1}`} onPress={() => patch('customPluginDirs', draft.customPluginDirs.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
@@ -189,7 +189,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
             <Input label="自定义 Python 解释器" value={draft.pythonPath ?? ''} placeholder="留空使用内嵌运行时；填绝对路径覆盖" description="显式指定后优先于内嵌运行时。仅在特殊调试场景使用。" isDisabled={busy} isInvalid={Boolean(errors.pythonPath)} errorMessage={errors.pythonPath} onValueChange={(value) => patch('pythonPath', value || null)} />
-            <Button variant="secondary" isDisabled={!desktop || busy} aria-label="浏览 Python 解释器" onPress={() => void browsePython()}>浏览文件</Button>
+            <Button variant="secondary" className="sm:mt-6" isDisabled={!desktop || busy} aria-label="浏览 Python 解释器" onPress={() => void browsePython()}>浏览文件</Button>
           </div>
           <label className="flex items-center gap-3 rounded-lg border border-divider p-3 text-sm">
             <Switch
@@ -234,7 +234,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
             return (
               <div key={tool} className="flex flex-col gap-2 sm:flex-row sm:items-start">
                 <Input label={`${name} 路径`} value={draft[key] ?? ''} placeholder={tool === 'ffmpeg' ? '可执行文件或 bin 目录；留空使用 PATH' : '优先使用此文件；否则查找 FFmpeg 同目录，再查 PATH'} description={tool === 'ffmpeg' ? '支持可执行文件路径或包含工具的 bin 目录。' : '显式 FFprobe 路径优先于 FFmpeg 同目录和系统 PATH。'} isDisabled={busy || checking} isInvalid={invalid} errorMessage={invalid ? status?.error ?? '该工具不可用，请检查路径或版本' : undefined} onValueChange={(value) => patch(key, value || null)} />
-                <Button variant="secondary" isDisabled={!desktop || busy || checking} aria-label={`浏览 ${name}`} onPress={() => void browseTool(tool)}>浏览文件</Button>
+                <Button variant="secondary" className="sm:mt-6" isDisabled={!desktop || busy || checking} aria-label={`浏览 ${name}`} onPress={() => void browseTool(tool)}>浏览文件</Button>
               </div>
             );
           })}
