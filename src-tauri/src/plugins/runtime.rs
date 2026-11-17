@@ -22,11 +22,16 @@ use serde_json::json;
 use thiserror::Error;
 
 use super::manifest::PluginManifest;
-use super::protocol::{PluginNotification, PluginResult, RpcResponse, PROTOCOL_VERSION};
+use super::protocol::{
+    PluginNotification, PluginResult, RpcError, RpcRequest, RpcResponse, PROTOCOL_VERSION,
+};
 
 /// 插件侧车进程启动/单次调用默认超时
 const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(600);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 宿主可提供给插件的反向 JSON-RPC 服务方法
+pub const HOST_SERVICE_FRAMES_EXTRACT: &str = "frames.extract";
 
 #[derive(Debug, Error)]
 pub enum PluginProcessError {
@@ -51,6 +56,12 @@ pub enum PluginProcessError {
 /// 插件 → 主程序的通知回调（progress / log）
 pub type NotificationHandler = Arc<dyn Fn(PluginNotification) + Send + Sync>;
 
+/// 插件 → 主程序的 JSON-RPC 请求处理回调（如 `frames.extract`）。
+///
+/// 仅在 `run` 调用期间生效（`run_with_services` 注入），
+/// 返回 `(code, message)` 错误或 result 值。
+pub type HostRequestHandler = Arc<dyn Fn(&RpcRequest) -> Result<serde_json::Value, (i32, String)> + Send + Sync>;
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
@@ -63,10 +74,12 @@ pub struct PluginProcess {
     pub plugin_dir: PathBuf,
     child: Child,
     stdin: ChildStdin,
-    /// 后台读取线程产出的响应/通知
-    rx: Receiver<RpcResponse>,
+    /// 后台读取线程产出的响应/请求/通知
+    rx: Receiver<Incoming>,
     #[allow(dead_code)]
     reader_thread: thread::JoinHandle<()>,
+    /// `run` 期间注入的宿主服务处理回调；`None` 时收到插件请求会回 `-32603`
+    host_service_handler: Option<HostRequestHandler>,
 }
 
 impl PluginProcess {
@@ -151,7 +164,7 @@ impl PluginProcess {
             .ok_or_else(|| PluginProcessError::SpawnFailed("无法获取 stdout".to_string()))?;
         let stderr = child.stderr.take();
 
-        let (tx, rx) = mpsc::channel::<RpcResponse>();
+        let (tx, rx) = mpsc::channel::<Incoming>();
         let reader_thread = spawn_reader(stdout, stderr, tx, on_notify);
 
         let mut process = Self {
@@ -161,13 +174,15 @@ impl PluginProcess {
             stdin,
             rx,
             reader_thread,
+            host_service_handler: None,
         };
 
         process.handshake()?;
         Ok(process)
     }
 
-    /// 协议握手：发送 `initialize`，校验 protocolVersion 兼容性。
+    /// 协议握手：发送 `initialize`，校验 protocolVersion 兼容性，
+    /// 并声明宿主提供的反向服务（如 `frames.extract`）。
     ///
     /// 版本规则：major 相同即兼容；主程序 major 为 0 时要求完全一致。
     fn handshake(&mut self) -> Result<(), PluginProcessError> {
@@ -176,6 +191,9 @@ impl PluginProcess {
             "capabilities": {
                 "progressEvents": true,
                 "cancellation": true,
+                "hostServices": {
+                    HOST_SERVICE_FRAMES_EXTRACT: "1.0.0",
+                },
             }
         });
         let response = self.call_with_timeout("initialize", params, HANDSHAKE_TIMEOUT)?;
@@ -195,13 +213,31 @@ impl PluginProcess {
     }
 
     /// 调用 `run` 方法并等待最终 `PluginResult`。
+    /// 旧接口：不启用宿主反向服务；插件请求 `frames.extract` 会收到 `-32603`。
     pub fn run(
         &mut self,
         params: serde_json::Value,
         timeout: Option<Duration>,
     ) -> Result<PluginResult, PluginProcessError> {
+        self.run_with_host_services(params, timeout, None)
+    }
+
+    /// 调用 `run` 并注册插件→宿主的反向 JSON-RPC 服务处理器。
+    ///
+    /// `handler` 只在本次 `run` 期间有效；收到 `frames.extract` 等请求时，
+    /// 由 `handler` 返回结果或 `(code, message)` 错误；宿主内部错误统一包为
+    /// `-32603`。
+    pub fn run_with_host_services(
+        &mut self,
+        params: serde_json::Value,
+        timeout: Option<Duration>,
+        handler: Option<HostRequestHandler>,
+    ) -> Result<PluginResult, PluginProcessError> {
+        self.host_service_handler = handler;
         let result =
-            self.call_with_timeout("run", params, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT))?;
+            self.call_with_timeout("run", params, timeout.unwrap_or(DEFAULT_CALL_TIMEOUT));
+        self.host_service_handler = None;
+        let result = result?;
         serde_json::from_value(result)
             .map_err(|e| PluginProcessError::InvalidResponse(format!("PluginResult 解析失败: {e}")))
     }
@@ -273,7 +309,7 @@ impl PluginProcess {
                 .rx
                 .recv_timeout(remaining.min(Duration::from_millis(250)))
             {
-                Ok(response) if response.id == id => {
+                Ok(Incoming::Response(response)) if response.id == id => {
                     if let Some(error) = response.error {
                         return Err(PluginProcessError::RemoteError {
                             code: error.code,
@@ -281,6 +317,9 @@ impl PluginProcess {
                         });
                     }
                     return Ok(response.result.unwrap_or(serde_json::Value::Null));
+                }
+                Ok(Incoming::Request(request)) => {
+                    self.dispatch_host_request(&request);
                 }
                 Ok(_) => continue, // 迟到/其他 id 的响应：丢弃
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -294,6 +333,54 @@ impl PluginProcess {
                 }
             }
         }
+    }
+
+    /// 处理插件反向请求：由 `host_service_handler` 分发，
+    /// 结果按 JSON-RPC 响应写回插件 stdin。
+    ///
+    /// 注意：只有 `run` 调用持有 `PluginProcess` 锁，`cancel`/`shutdown`
+    /// 等并发调用会先等锁，因此此处写 stdin 不会与其他写入交错。
+    fn dispatch_host_request(&mut self, request: &RpcRequest) {
+        let response = match &self.host_service_handler {
+            Some(handler) => match handler(request) {
+                Ok(result) => RpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: Some(result),
+                    error: None,
+                },
+                Err((code, message)) => RpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: None,
+                    error: Some(RpcError {
+                        code,
+                        message,
+                        data: None,
+                    }),
+                },
+            },
+            None => RpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: None,
+                error: Some(RpcError {
+                    code: -32603,
+                    message: "宿主服务不可用（当前不在 run 调用期间）".to_string(),
+                    data: None,
+                }),
+            },
+        };
+        let _ = self.write_response(&response);
+    }
+
+    /// 序列化响应并写入插件 stdin（尽力而为）。
+    fn write_response(&mut self, response: &RpcResponse) -> std::io::Result<()> {
+        let mut line = serde_json::to_string(response)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.flush()
     }
 
     pub fn is_alive(&mut self) -> bool {
@@ -313,7 +400,7 @@ impl Drop for PluginProcess {
 fn spawn_reader(
     stdout: ChildStdout,
     stderr: Option<std::process::ChildStderr>,
-    tx: mpsc::Sender<RpcResponse>,
+    tx: mpsc::Sender<Incoming>,
     on_notify: Option<NotificationHandler>,
 ) -> thread::JoinHandle<()> {
     // stderr 直接丢弃到独立 drain 线程，防止插件写满管道阻塞
@@ -334,8 +421,13 @@ fn spawn_reader(
                 continue;
             }
             match serde_json::from_str::<Incoming>(trimmed) {
+                Ok(Incoming::Request(request)) => {
+                    if tx.send(Incoming::Request(request)).is_err() {
+                        break;
+                    }
+                }
                 Ok(Incoming::Response(response)) => {
-                    if tx.send(response).is_err() {
+                    if tx.send(Incoming::Response(response)).is_err() {
                         break;
                     }
                 }
@@ -355,10 +447,16 @@ fn spawn_reader(
     })
 }
 
-/// 入站消息：带 `id`（响应）或不带（通知）。
+/// 入站消息：插件发起的请求（带 `id` + `method`）、
+/// 插件对宿主请求的响应（带 `id` + `result`/`error`）、
+/// 或无 `id` 的通知（progress / log）。
+///
+/// `untagged` 顺序很重要：`RpcResponse` 的所有字段都有 `Option` 默认值，
+/// 会把插件请求误判成"空响应"，因此 `Request` 必须放在最前面。
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Incoming {
+    Request(RpcRequest),
     Response(RpcResponse),
     Notification(PluginNotification),
 }
@@ -430,6 +528,23 @@ mod tests {
         match notif {
             Incoming::Notification(n) => assert_eq!(n.method, "progress"),
             _ => panic!("expected notification"),
+        }
+    }
+
+    #[test]
+    fn incoming_parses_plugin_request_before_response() {
+        // 插件请求带 id + method：untagged 必须优先匹配 Request，
+        // 否则 RpcResponse 的全 Option 字段会把它错当成"空响应"。
+        let req: Incoming = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":42,"method":"frames.extract","params":{"video_path":"/v.mp4"}}"#,
+        )
+        .expect("request");
+        match req {
+            Incoming::Request(r) => {
+                assert_eq!(r.id, 42);
+                assert_eq!(r.method, "frames.extract");
+            }
+            _ => panic!("expected request"),
         }
     }
 }

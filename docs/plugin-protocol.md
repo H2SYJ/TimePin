@@ -91,6 +91,22 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
 
 ## 通知（插件 → 主程序）
 
+### `hostServices`（宿主反向服务，能力独立版本）
+
+`initialize` **请求**的 `params.capabilities.hostServices` 是宿主广播给插件的服务能力表（不是插件 response 的一部分）。例如：
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+  "protocolVersion":"1.0.0",
+  "capabilities":{"progressEvents":true,"cancellation":true,
+                  "hostServices":{"framesExtract":"1.0.0"}}
+}}
+```
+
+- `framesExtract:"1.0.0"` 表示宿主在 `run` 期间提供反向服务 `frames.extract`；插件读它判断可调用，**不要**写回自己的 response。
+- 字段名 camelCase、值是 semver 字符串、与插件 RPC `protocolVersion` 分离演进。
+- 请求/响应契约与 JSON Schema 见 `docs/frame-service.md` 与 `docs/schemas/frames-extract.schema.json`；Python 客户端为 `plugins/frame_client.py`（标准库实现）。
+
 ### `progress`
 ```json
 {"jsonrpc":"2.0","method":"progress","params":{

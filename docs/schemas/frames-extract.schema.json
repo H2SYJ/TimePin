@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://timepin/schemas/frames-extract.schema.json",
+  "title": "frames.extract request params and result (capability v1.0.0)",
+  "description": "Wire contract for the host-provided frames.extract service. Separate capability version from the plugin RPC protocol (which stays 1.0.0). Host serves requests during a plugin run; scratch_dir must canonicalize inside the run outputDir.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/request"
+    },
+    {
+      "$ref": "#/definitions/result"
+    }
+  ],
+  "definitions": {
+    "request": {
+      "type": "object",
+      "required": [
+        "video_path",
+        "options"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "const": "1.0.0",
+          "default": "1.0.0",
+          "description": "frames capability version; the plugin RPC protocol remains 1.0.0 and is negotiated separately in initialize."
+        },
+        "video_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Local media path. Source is read-only; never modified."
+        },
+        "options": {
+          "$ref": "#/definitions/options"
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "required": [
+        "time_range",
+        "scratch_dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "image2",
+            "keyframes"
+          ],
+          "default": "image2",
+          "description": "image2 = ffmpeg decode + uniform sampling; keyframes = mp4 stss/stts/ctts index only, real packet PTS, no intermediate frames synthesized."
+        },
+        "time_range": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/definitions/finiteNonNegative"
+            },
+            {
+              "$ref": "#/definitions/finiteNonNegative"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Half-open [start, end) in seconds. start < end."
+        },
+        "sample_fps": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "default": null,
+          "description": "Positive finite max sampling rate. For keyframes it bounds/thins the keyframe list to intervals >= 1/sample_fps; it never synthesizes intermediate frames. 0 is invalid (-32602); null = no filter."
+        },
+        "output_format": {
+          "type": "string",
+          "enum": [
+            "jpeg",
+            "png"
+          ],
+          "default": "jpeg",
+          "description": "JPEG smaller/faster; PNG lossless."
+        },
+        "scratch_dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory the host writes frame files into (<scratch_dir>/<uuid>/). Must canonicalize inside the authorized run outputDir."
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "files",
+            "base64"
+          ],
+          "default": "files",
+          "description": "files = only path returned; base64 = files still written AND image_base64 filled. Host never deletes either."
+        }
+      }
+    },
+    "finiteNonNegative": {
+      "type": "number",
+      "minimum": 0
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "frames",
+        "total_frames",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/frame"
+          }
+        },
+        "total_frames": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Must equal frames.length."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "image2",
+            "keyframes"
+          ]
+        }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "required": [
+        "index",
+        "pts_sec",
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pts_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Real source presentation timestamp in seconds, never derived from index * sample_fps."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Written frame file under scratch_dir/<uuid>/."
+        },
+        "image_base64": {
+          "type": "string",
+          "description": "Only present when options.delivery == 'base64'."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "protocolVersion": "1.0.0",
+      "video_path": "C:/videos/game.mp4",
+      "options": {
+        "mode": "image2",
+        "time_range": [
+          10.0,
+          15.0
+        ],
+        "sample_fps": 2.0,
+        "output_format": "jpeg",
+        "scratch_dir": "C:/output/my-plugin/vid-1/frames",
+        "delivery": "files"
+      }
+    },
+    {
+      "protocolVersion": "1.0.0",
+      "video_path": "C:/videos/game.mp4",
+      "options": {
+        "mode": "keyframes",
+        "time_range": [
+          0.0,
+          60.0
+        ],
+        "sample_fps": null,
+        "output_format": "png",
+        "scratch_dir": "C:/output/my-plugin/vid-1/kf",
+        "delivery": "base64"
+      }
+    },
+    {
+      "protocolVersion": "1.0.0",
+      "frames": [
+        {
+          "index": 0,
+          "pts_sec": 10.0417,
+          "path": "C:/output/.../frame_000.jpg"
+        },
+        {
+          "index": 1,
+          "pts_sec": 10.5417,
+          "path": "C:/output/.../frame_001.jpg"
+        }
+      ],
+      "total_frames": 2,
+      "mode": "image2"
+    }
+  ]
+}
