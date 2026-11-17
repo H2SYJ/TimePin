@@ -22,6 +22,7 @@ export interface WindowState {
 export interface Settings {
   importDirectory: string | null;
   ffmpegPath: string | null;
+  ffprobePath: string | null;
   thumbnailQuality: number;
   thumbnailMaxDimension: number;
   maxConcurrentImports: number;
@@ -32,6 +33,42 @@ export interface Settings {
   customPluginDirs: string[];
   recentFiles: string[];
   windowState: WindowState | null;
+}
+
+export interface AdvancedSettingsInfo {
+  schemaVersion: string;
+  defaultPluginDirectory: string;
+  installDirectory: string;
+}
+
+export interface DependencyStatus {
+  id: 'ffmpeg' | 'ffprobe';
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  error: string | null;
+  minimumVersion: string;
+}
+
+export interface DependencyReport {
+  schemaVersion: string;
+  dependencies: DependencyStatus[];
+}
+
+export interface DependencyInstallProgress {
+  schemaVersion: string;
+  taskId: string;
+  stage: 'download' | 'extract' | 'validate' | 'completed' | 'failed';
+  progress: number;
+  message: string;
+  error: string | null;
+}
+
+export interface InstalledDependencies {
+  schemaVersion: string;
+  ffmpegPath: string;
+  ffprobePath: string;
+  report: DependencyReport;
 }
 
 export interface VideoInfo {

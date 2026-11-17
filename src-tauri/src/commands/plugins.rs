@@ -10,16 +10,89 @@ use crate::plugins::runtime::PluginProcessError;
 use crate::plugins::PluginError;
 
 pub fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
-    let mut dirs = PluginManager::builtin_plugin_dirs(app);
-    if let Ok(settings) = crate::core::settings::load_settings(app) {
-        dirs.extend(settings.custom_plugin_dirs);
-    }
-    dirs
+    let custom_dirs = crate::core::settings::load_settings(app)
+        .map(|settings| settings.custom_plugin_dirs)
+        .unwrap_or_default();
+    PluginManager::plugin_dirs(app, &custom_dirs)
 }
 
 #[tauri::command]
 pub async fn get_plugins(manager: State<'_, PluginManager>) -> Result<Vec<PluginInfo>, String> {
     Ok(manager.list())
+}
+
+/// 只允许打开已保存的自定义搜索根，或应用自有的默认目录。
+#[tauri::command]
+pub async fn open_plugin_directory(
+    app_handle: AppHandle,
+    index: Option<usize>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings =
+            crate::core::settings::load_settings(&app_handle).map_err(|error| error.to_string())?;
+        let path = select_plugin_directory(
+            crate::core::get_default_plugins_dir(&app_handle),
+            &settings.custom_plugin_dirs,
+            index,
+        )?;
+        if index.is_none() {
+            std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+        }
+        if !path.is_dir() {
+            return Err("插件目录不存在或不是目录，请检查已保存的设置".to_string());
+        }
+        open_directory(&path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn select_plugin_directory(
+    default_directory: PathBuf,
+    custom_directories: &[PathBuf],
+    index: Option<usize>,
+) -> Result<PathBuf, String> {
+    let path = match index {
+        None => default_directory,
+        Some(index) => custom_directories
+            .get(index)
+            .cloned()
+            .ok_or_else(|| "自定义插件目录索引无效，请先保存设置".to_string())?,
+    };
+    if !path.is_absolute() {
+        return Err("插件目录必须是绝对路径".to_string());
+    }
+    Ok(path)
+}
+
+fn open_directory(path: &std::path::Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(windows)]
+    let mut command = {
+        let windows =
+            std::env::var_os("WINDIR").ok_or_else(|| "无法找到 Windows 资源管理器".to_string())?;
+        Command::new(PathBuf::from(windows).join("explorer.exe"))
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/usr/bin/open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    let mut child = command
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("无法打开插件目录：{error}"))?;
+    // Some system openers stay alive until their window closes. Do not hold the
+    // IPC call open for that window's lifetime, but still reap the child.
+    std::thread::spawn(move || {
+        if let Err(error) = child.wait() {
+            log::warn!("Failed to reap plugin-directory opener: {error}");
+        }
+    });
+    Ok(())
 }
 
 /// 重新扫描插件目录（热重载）：停掉全部进程、重新发现。
@@ -130,4 +203,33 @@ pub async fn run_plugins(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    #[test]
+    fn opens_only_saved_roots_or_app_owned_default() {
+        let root = tempfile::tempdir().unwrap();
+        let default = root.path().join("app-data/plugins");
+        let first = root.path().join("custom-first");
+        let second = root.path().join("custom-second");
+        let custom = vec![first.clone(), second.clone()];
+        assert_eq!(
+            select_plugin_directory(default.clone(), &custom, None).unwrap(),
+            default
+        );
+        assert_eq!(
+            select_plugin_directory(default.clone(), &custom, Some(0)).unwrap(),
+            first
+        );
+        assert_eq!(
+            select_plugin_directory(default.clone(), &custom, Some(1)).unwrap(),
+            second
+        );
+        assert!(select_plugin_directory(default.clone(), &custom, Some(2)).is_err());
+        assert!(select_plugin_directory(default, &[], Some(0)).is_err());
+        assert!(select_plugin_directory(PathBuf::from("relative"), &[], None).is_err());
+    }
 }

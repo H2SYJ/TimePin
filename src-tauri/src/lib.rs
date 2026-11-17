@@ -14,17 +14,12 @@ pub fn run() {
 
             crate::core::init(app.handle())?;
 
-            // 插件管理器：扫描内置 plugins/ + 设置中的 customPluginDirs。
-            // 只发现与校验，进程在执行首个任务时懒启动。
+            // Discover bundled, app-owned and saved custom roots without starting processes.
+            let custom_dirs = crate::core::settings::load_settings(app.handle())
+                .map(|settings| settings.custom_plugin_dirs)
+                .unwrap_or_default();
             let plugin_dirs =
-                crate::plugins::manager::PluginManager::builtin_plugin_dirs(app.handle())
-                    .into_iter()
-                    .chain(
-                        crate::core::settings::load_settings(app.handle())
-                            .map(|s| s.custom_plugin_dirs)
-                            .unwrap_or_default(),
-                    )
-                    .collect::<Vec<_>>();
+                crate::plugins::manager::PluginManager::plugin_dirs(app.handle(), &custom_dirs);
             let manager =
                 crate::plugins::manager::PluginManager::discover(app.handle(), &plugin_dirs);
             app.manage(manager);
@@ -40,6 +35,10 @@ pub fn run() {
             crate::commands::updater::get_updater_config,
             crate::commands::settings::get_settings,
             crate::commands::settings::save_settings,
+            crate::commands::settings::validate_dependencies,
+            crate::commands::settings::get_advanced_settings_info,
+            crate::commands::plugins::open_plugin_directory,
+            crate::commands::dependencies::install_dependencies,
             crate::commands::library::import_video,
             crate::commands::library::get_videos,
             crate::commands::library::delete_video,

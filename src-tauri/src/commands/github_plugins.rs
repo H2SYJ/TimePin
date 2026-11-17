@@ -4,10 +4,10 @@
 //! 解压过程会过滤 `..` 与绝对路径，manifest 使用与本地插件相同的 PluginManifest::validate() 校验。
 
 use serde::{Deserialize, Serialize};
+use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use tauri::{command, Emitter};
 use zip::ZipArchive;
-use std::io::{Cursor, Read};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const SEARCH_QUERY: &str = "topic:time-pin-plugins";
@@ -147,10 +147,7 @@ async fn fetch_github_api(url: &str, token: Option<&str>) -> Result<reqwest::Res
         request = request.header("Authorization", format!("Bearer {}", token));
     }
 
-    request
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {e}"))
+    request.send().await.map_err(|e| format!("请求失败: {e}"))
 }
 
 async fn get_rate_limit_headers(response: &reqwest::Response) -> (Option<u32>, Option<u64>) {
@@ -208,9 +205,7 @@ async fn fetch_plugin_manifest(
     branch: &str,
     token: Option<&str>,
 ) -> Result<Option<PluginManifest>, String> {
-    let url = format!(
-        "{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/plugin.json?ref={branch}"
-    );
+    let url = format!("{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/plugin.json?ref={branch}");
 
     let response = fetch_github_api(&url, token).await?;
 
@@ -270,13 +265,8 @@ pub async fn discover_github_plugins(
     let mut discovered = Vec::with_capacity(repos.len());
 
     for repo in repos {
-        let manifest_result = fetch_plugin_manifest(
-            &repo.owner.login,
-            &repo.name,
-            &repo.default_branch,
-            token,
-        )
-        .await;
+        let manifest_result =
+            fetch_plugin_manifest(&repo.owner.login, &repo.name, &repo.default_branch, token).await;
 
         let (manifest, manifest_error, local_path) = match manifest_result {
             Ok(Some(m)) => {
@@ -364,8 +354,7 @@ fn extract_zip_to_dir(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String>
 
         // 确保父目录存在
         if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录失败: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
         }
 
         let mut contents = Vec::with_capacity(file.size() as usize);
@@ -434,13 +423,16 @@ pub async fn install_github_plugin(
     let plugin_dir = primary_dir.join(&manifest.name);
     if plugin_dir.exists() {
         // 已存在：先备份旧目录
-        let backup_dir = primary_dir.join(format!("{}.bak-{}", manifest.name, chrono::Utc::now().timestamp()));
+        let backup_dir = primary_dir.join(format!(
+            "{}.bak-{}",
+            manifest.name,
+            chrono::Utc::now().timestamp()
+        ));
         std::fs::rename(&plugin_dir, &backup_dir)
             .map_err(|e| format!("备份旧插件目录失败: {e}"))?;
     }
 
-    std::fs::create_dir_all(&plugin_dir)
-        .map_err(|e| format!("创建插件目录失败: {e}"))?;
+    std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建插件目录失败: {e}"))?;
 
     // 3) 下载并解压 ZIP
     let zip_bytes = download_repo_zip(&owner, &repo, &branch, token).await?;
@@ -455,11 +447,14 @@ pub async fn install_github_plugin(
 
     // 5) 触发插件重新扫描（异步事件而非直接调用 reload_plugins，避免循环调用）
     // 前端监听到 plugin_status_changed 会刷新列表
-    let _ = app_handle.emit(crate::plugins::manager::EVENT_PLUGIN_STATUS, serde_json::json!({
-        "pluginName": manifest.name,
-        "status": "ready",
-        "detail": "installed via GitHub"
-    }));
+    let _ = app_handle.emit(
+        crate::plugins::manager::EVENT_PLUGIN_STATUS,
+        serde_json::json!({
+            "pluginName": manifest.name,
+            "status": "ready",
+            "detail": "installed via GitHub"
+        }),
+    );
 
     Ok(format!(
         "插件 {} 安装成功，路径: {}",
@@ -502,9 +497,7 @@ mod tests {
     #[test]
     fn zip_extract_rejects_path_traversal() {
         // 直接构造一个包含 ../ 的恶意条目
-        let zip = build_zip(&[
-            ("owner-repo-abc1234/../../escape.py", b"mal"),
-        ]);
+        let zip = build_zip(&[("owner-repo-abc1234/../../escape.py", b"mal")]);
         let tmp = tempfile::tempdir().unwrap();
         let res = extract_zip_to_dir(&zip, tmp.path());
         assert!(res.is_err(), "expected traversal rejection, got: {res:?}");
@@ -512,9 +505,7 @@ mod tests {
 
     #[test]
     fn zip_extract_rejects_absolute_path() {
-        let zip = build_zip(&[
-            ("owner-repo-abc1234//abs/evil.py", b"mal"),
-        ]);
+        let zip = build_zip(&[("owner-repo-abc1234//abs/evil.py", b"mal")]);
         let tmp = tempfile::tempdir().unwrap();
         // "/abs/..." 在 Path::components 中是 RootDir + Normal，应被拒绝
         let res = extract_zip_to_dir(&zip, tmp.path());

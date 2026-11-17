@@ -2,6 +2,10 @@ import { convertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen, UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type {
+  AdvancedSettingsInfo,
+  DependencyInstallProgress,
+  DependencyReport,
+  InstalledDependencies,
   ExportMode,
   ImportResult,
   Mark,
@@ -47,6 +51,7 @@ function browserSettings(): Settings {
   return {
     importDirectory: null,
     ffmpegPath: null,
+    ffprobePath: null,
     thumbnailQuality: 80,
     thumbnailMaxDimension: 320,
     maxConcurrentImports: 3,
@@ -68,8 +73,47 @@ export const api = {
   },
 
   async saveSettings(settings: Settings): Promise<void> {
-    if (!isTauri()) return;
+    if (!isTauri()) throw new Error('保存设置需要在 TimePin 桌面应用中运行');
     return tauriInvoke<void>('save_settings', { settings });
+  },
+
+  async getAdvancedSettingsInfo(): Promise<AdvancedSettingsInfo> {
+    if (!isTauri()) throw new Error('高级设置需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<AdvancedSettingsInfo>('get_advanced_settings_info');
+  },
+
+  async validateDependencies(settings: Settings): Promise<DependencyReport> {
+    if (!isTauri()) throw new Error('依赖检测需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<DependencyReport>('validate_dependencies', { settings });
+  },
+
+  async openPluginDirectory(index: number | null): Promise<void> {
+    if (!isTauri()) throw new Error('打开插件目录需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<void>('open_plugin_directory', { index });
+  },
+
+  async pickDirectory(): Promise<string | null> {
+    if (!isTauri()) throw new Error('目录选择需要在 TimePin 桌面应用中运行');
+    const selected = await open({ directory: true, multiple: false, title: '选择插件搜索目录' });
+    return Array.isArray(selected) ? selected[0] ?? null : selected;
+  },
+
+  async pickExecutable(tool: 'ffmpeg' | 'ffprobe'): Promise<string | null> {
+    if (!isTauri()) throw new Error('工具选择需要在 TimePin 桌面应用中运行');
+    const selected = await open({ multiple: false, title: `选择 ${tool} 可执行文件` });
+    return Array.isArray(selected) ? selected[0] ?? null : selected;
+  },
+
+  async installDependencies(taskId: string): Promise<InstalledDependencies> {
+    if (!isTauri()) throw new Error('依赖安装需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<InstalledDependencies>('install_dependencies', { taskId });
+  },
+
+  async onDependencyInstallProgress(
+    handler: (event: DependencyInstallProgress) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) throw new Error('依赖安装监听需要在 TimePin 桌面应用中运行');
+    return tauriListen<DependencyInstallProgress>('dependency://install-progress', (event) => handler(event.payload));
   },
 
   async getVideos(): Promise<VideoInfo[]> {
