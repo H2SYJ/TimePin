@@ -1,6 +1,21 @@
-import { Card, CardBody, CardHeader, Button, Badge } from '@/components/ui';
-import { useEffect, useState } from 'react';
-import type { PluginInfo, VideoInfo } from '@/types';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  FormField,
+  FormSection,
+  Input,
+  Progress,
+  SelectButtonGroup,
+  Switch,
+  Tab,
+  Tabs,
+} from '@/components/ui';
+import { useEffect, useMemo, useState } from 'react';
+import type { PluginInfo, PluginParameterSchema, VideoInfo } from '@/types';
 import { useAppStore } from '@/stores/app';
 import { useUpdateStore } from '@/stores/updater';
 import { api } from '@/lib/ipc';
@@ -8,6 +23,17 @@ import type { OrchestrationMode, OrchestrationResult } from '@/types';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, Zap, Github } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { GitHubPluginDiscovery } from '@/features/library/GitHubPluginDiscovery';
+
+/** 插件运行参数：由 parametersSchema 的 default 初始化，UI 编辑后覆盖。 */
+type PluginParamValues = Record<string, string | number | boolean | null>;
+
+function defaultsForSchema(schema: Record<string, PluginParameterSchema>): PluginParamValues {
+  const values: PluginParamValues = {};
+  for (const [key, s] of Object.entries(schema)) {
+    values[key] = s.default ?? null;
+  }
+  return values;
+}
 
 export function PluginsPage() {
   const { settings } = useAppStore();
@@ -21,8 +47,9 @@ export function PluginsPage() {
   const [orchestrationRunning, setOrchestrationRunning] = useState(false);
   const [orchestrationProgress, setOrchestrationProgress] = useState<{ completed: number; total: number; stage: string } | null>(null);
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null);
-  // 标签页状态
-  const [activeTab, setActiveTab] = useState<'local' | 'discover'>('local');
+  // 每个插件的参数草稿：name → {param: value}
+  const [paramValues, setParamValues] = useState<Record<string, PluginParamValues>>({});
+  const [activeTab, setActiveTab] = useState<string>('local');
 
   useEffect(() => {
     let disposed = false;
@@ -52,6 +79,17 @@ export function PluginsPage() {
     try {
       const list = await api.getPlugins();
       setPlugins(list);
+      // 为每个有 schema 的插件初始化参数默认值（不覆盖用户已改动的草稿）
+      setParamValues((prev) => {
+        const next = { ...prev };
+        for (const plugin of list) {
+          const schema = plugin.parametersSchema;
+          if (!next[plugin.name] && schema && typeof schema === 'object' && Object.keys(schema).length > 0) {
+            next[plugin.name] = defaultsForSchema(schema);
+          }
+        }
+        return next;
+      });
     } catch (e) {
       console.error('加载插件列表失败:', e);
     } finally {
@@ -127,6 +165,36 @@ export function PluginsPage() {
     }
   };
 
+  const updatePluginParam = (pluginName: string, key: string, value: string | number | boolean | null) => {
+    setParamValues((prev) => ({
+      ...prev,
+      [pluginName]: { ...(prev[pluginName] ?? {}), [key]: value },
+    }));
+  };
+
+  /** 将 UI 草稿值按 schema 类型转换为传给插件的实际值。空字符串/未设置传 undefined（插件用默认）。 */
+  const buildRunParams = (plugin: PluginInfo): Record<string, unknown> => {
+    const schema = plugin.parametersSchema && typeof plugin.parametersSchema === 'object'
+      ? plugin.parametersSchema
+      : {};
+    const draft = paramValues[plugin.name] ?? {};
+    const params: Record<string, unknown> = {};
+    for (const [key, s] of Object.entries(schema)) {
+      const raw = draft[key];
+      if (raw === null || raw === undefined || raw === '') continue;
+      const type = s.type ?? 'string';
+      if (type === 'boolean') {
+        params[key] = Boolean(raw);
+      } else if (type === 'number' || type === 'integer') {
+        const num = typeof raw === 'number' ? raw : Number(raw);
+        if (!Number.isNaN(num)) params[key] = num;
+      } else {
+        params[key] = String(raw);
+      }
+    }
+    return params;
+  };
+
   const handleRun = async (plugin: PluginInfo, video: VideoInfo | null) => {
     setLogs([]);
     if (!video) {
@@ -138,7 +206,7 @@ export function PluginsPage() {
     const workToken = useUpdateStore.getState().beginWork('plugin');
     try {
       setRunningTasks((prev) => ({ ...prev, [taskId]: { progress: 0, message: '启动中...' } }));
-      const result = await api.runPlugin(plugin.name, video, {}, outputDir);
+      const result = await api.runPlugin(plugin.name, video, buildRunParams(plugin), outputDir);
       setLogs((prev) => [...prev, `[OK] 完成：生成 ${result.marks.length} 个标注`]);
       setRunningTasks((prev) => {
         const next = { ...prev };
@@ -188,9 +256,16 @@ export function PluginsPage() {
     ]);
     try {
       const outputDir = `${settings.importDirectory || '.'}/plugin-output/batch-${Date.now()}`;
+      // 为每个插件构建 per-plugin 参数，保证批量运行也使用 UI 里的配置。
+      const perPluginParams: Record<string, Record<string, unknown>> = {};
+      for (const name of selectedPlugins) {
+        const plugin = plugins.find((p) => p.name === name);
+        if (plugin) perPluginParams[name] = buildRunParams(plugin);
+      }
       const result = await api.runPlugins({
         pluginNames: Array.from(selectedPlugins),
         videos: [selectedVideo],
+        perPluginParams,
         outputDir,
         mode: orchestrationMode,
       });
@@ -241,6 +316,56 @@ export function PluginsPage() {
   const selectedVideoId = useAppStore((state) => state.selectedVideoId);
   const selectedVideo = videos.find((v) => v.id === selectedVideoId) || videos[0] || null;
 
+  const tabItems = useMemo(
+    () => [
+      {
+        key: 'local',
+        title: (
+          <span className="flex items-center gap-1.5">
+            <Code className="h-4 w-4" aria-hidden="true" />
+            本地插件 ({plugins.length})
+          </span>
+        ),
+        content: (
+          <LocalPluginsTab
+            plugins={plugins}
+            loading={loading}
+            selectedVideo={selectedVideo}
+            runningTasks={runningTasks}
+            onRun={handleRun}
+            onCancel={handleCancel}
+            onStop={handleStopPlugin}
+            selectedPlugins={selectedPlugins}
+            onToggleSelected={togglePluginSelected}
+            orchestrationMode={orchestrationMode}
+            setOrchestrationMode={setOrchestrationMode}
+            orchestrationRunning={orchestrationRunning}
+            orchestrationProgress={orchestrationProgress}
+            orchestrationResult={orchestrationResult}
+            handleRunSelected={handleRunSelected}
+            toggleAllPlugins={toggleAllPlugins}
+            logs={logs}
+            setLogs={setLogs}
+            paramValues={paramValues}
+            onParamChange={updatePluginParam}
+          />
+        ),
+      },
+      {
+        key: 'discover',
+        title: (
+          <span className="flex items-center gap-1.5">
+            <Github className="h-4 w-4" aria-hidden="true" />
+            发现插件
+          </span>
+        ),
+        content: <GitHubPluginDiscovery />,
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plugins, loading, selectedVideo, runningTasks, selectedPlugins, orchestrationMode, orchestrationRunning, orchestrationProgress, orchestrationResult, logs, paramValues],
+  );
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -253,86 +378,36 @@ export function PluginsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-auto px-8 pb-8 pt-6">
-      {/* 顶部工具栏 */}
-      <div className="flex items-center justify-between gap-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-divider px-4 py-5 lg:px-8">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">插件</h1>
+            <h1 className="text-xl font-semibold tracking-tight">插件</h1>
             {plugins.some((p) => p.status === 'crashed') && (
               <Badge className="border border-warning/40 bg-warning/10 text-warning">
                 有插件已崩溃
               </Badge>
             )}
           </div>
-          <p className="mt-1.5 text-sm text-default-500">
+          <p className="mt-1 text-sm text-default-500">
             管理自动打标插件，新插件放入 plugins/ 目录即可被识别
           </p>
         </div>
-        <Button variant="secondary" onClick={handleReload} disabled={loading}>
+        <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
           <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} aria-hidden="true" />
           重新加载
         </Button>
-      </div>
+      </header>
 
-      {/* 标签页：本地插件 / 发现插件 */}
-      <div className="flex-1 flex flex-col">
-        <div className="flex gap-1 border-b border-divider pb-1">
-          <button
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-t-lg transition-colors',
-              activeTab === 'local'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-default-500 hover:text-foreground hover:bg-default-100'
-            )}
-            onClick={() => setActiveTab('local')}
-          >
-            <Code className="mr-1 h-4 w-4 inline" aria-hidden="true" />
-            本地插件 ({plugins.length})
-          </button>
-          <button
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-t-lg transition-colors',
-              activeTab === 'discover'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-default-500 hover:text-foreground hover:bg-default-100'
-            )}
-            onClick={() => setActiveTab('discover')}
-          >
-            <Github className="mr-1 h-4 w-4 inline" aria-hidden="true" />
-            发现插件
-          </button>
-        </div>
-
-        <div className="flex-1 min-h-0">
-          {activeTab === 'local' && (
-            <LocalPluginsTab
-              plugins={plugins}
-              loading={loading}
-              selectedVideo={selectedVideo}
-              runningTasks={runningTasks}
-              onRun={handleRun}
-              onCancel={handleCancel}
-              onStop={handleStopPlugin}
-              selectedPlugins={selectedPlugins}
-              onToggleSelected={togglePluginSelected}
-              orchestrationMode={orchestrationMode}
-              setOrchestrationMode={setOrchestrationMode}
-              orchestrationRunning={orchestrationRunning}
-              orchestrationProgress={orchestrationProgress}
-              orchestrationResult={orchestrationResult}
-              handleRunSelected={handleRunSelected}
-              toggleAllPlugins={toggleAllPlugins}
-              logs={logs}
-              setLogs={setLogs}
-            />
-          )}
-
-          {activeTab === 'discover' && (
-            <GitHubPluginDiscovery />
-          )}
-        </div>
-      </div>
+      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-8 lg:px-8">
+        <Tabs value={activeTab} onValueChange={setActiveTab} aria-label="插件管理" className="pt-4">
+          {tabItems.map((item) => (
+            <Tab key={item.key} tabKey={item.key} title={item.title}>
+              {item.content}
+            </Tab>
+          ))}
+        </Tabs>
+      </main>
     </div>
   );
 }
@@ -356,6 +431,8 @@ interface LocalPluginsTabProps {
   toggleAllPlugins: () => void;
   logs: string[];
   setLogs: React.Dispatch<React.SetStateAction<string[]>>;
+  paramValues: Record<string, PluginParamValues>;
+  onParamChange: (pluginName: string, key: string, value: string | number | boolean | null) => void;
 }
 
 function LocalPluginsTab({
@@ -377,6 +454,8 @@ function LocalPluginsTab({
   toggleAllPlugins,
   logs,
   setLogs,
+  paramValues,
+  onParamChange,
 }: LocalPluginsTabProps) {
   if (loading) {
     return (
@@ -389,42 +468,41 @@ function LocalPluginsTab({
     );
   }
 
+  const runnableCount = plugins.filter((p) => p.status === 'ready' || p.status === 'crashed').length;
+  const allSelected = selectedPlugins.size > 0 && selectedPlugins.size === runnableCount;
+
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto">
       {/* M4 编排工具栏 */}
       {plugins.length > 0 && (
-        <Card className="rounded-2xl border-divider bg-default-50/50 p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={
-                  selectedPlugins.size > 0 &&
-                  selectedPlugins.size ===
-                    plugins.filter((p) => p.status === 'ready' || p.status === 'crashed').length
-                }
-                onChange={toggleAllPlugins}
-                className="h-4 w-4"
-              />
-              <span className="text-default-600">全选可运行插件</span>
-            </label>
+        <FormSection
+          title="批量运行"
+          description="勾选插件后在当前视频上批量执行，可切换串行/并行模式。"
+        >
+          <div className="flex flex-wrap items-center gap-4">
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={toggleAllPlugins}
+              label="全选可运行插件"
+              aria-label="全选可运行插件"
+            />
             <div className="h-4 w-px bg-divider" />
-            <label className="flex items-center gap-2 text-sm">
-              <span className="text-default-600">模式</span>
-              <select
+            <FormField label="模式" fieldId="orchestration-mode" labelAuto className="min-w-[220px]">
+              <SelectButtonGroup
                 value={orchestrationMode}
-                onChange={(e) => setOrchestrationMode(e.target.value as OrchestrationMode)}
-                disabled={orchestrationRunning}
-                className="h-8 rounded-md border border-divider bg-background px-2 text-xs"
-              >
-                <option value="sequential">串行</option>
-                <option value="parallel">并行</option>
-              </select>
-            </label>
+                onValueChange={setOrchestrationMode}
+                isDisabled={orchestrationRunning}
+                aria-label="批量运行模式"
+                options={[
+                  { value: 'sequential', label: '串行' },
+                  { value: 'parallel', label: '并行' },
+                ]}
+              />
+            </FormField>
             <Button
               size="sm"
-              onClick={handleRunSelected}
-              disabled={orchestrationRunning || selectedPlugins.size === 0 || !selectedVideo}
+              onPress={handleRunSelected}
+              isDisabled={orchestrationRunning || selectedPlugins.size === 0 || !selectedVideo}
             >
               {orchestrationRunning ? (
                 <>
@@ -444,7 +522,7 @@ function LocalPluginsTab({
               </div>
             )}
           </div>
-        </Card>
+        </FormSection>
       )}
 
       {/* 插件列表 */}
@@ -476,6 +554,8 @@ function LocalPluginsTab({
               selected={selectedPlugins.has(plugin.name)}
               onToggleSelected={() => onToggleSelected(plugin.name)}
               selectable={plugin.status === 'ready' || plugin.status === 'crashed'}
+              paramValues={paramValues[plugin.name] ?? {}}
+              onParamChange={(key, value) => onParamChange(plugin.name, key, value)}
             />
           ))
         )}
@@ -486,7 +566,7 @@ function LocalPluginsTab({
         <Card className="flex h-64 flex-col rounded-2xl border-divider bg-default-50/50">
           <CardHeader className="flex items-center justify-between p-4 pb-3">
             <h3 className="text-sm font-medium">插件日志</h3>
-            <Button variant="ghost" size="icon" onClick={() => setLogs([])}>
+            <Button variant="ghost" size="icon" onPress={() => setLogs([])}>
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
           </CardHeader>
@@ -523,6 +603,76 @@ interface PluginCardProps {
   selected: boolean;
   onToggleSelected: () => void;
   selectable: boolean;
+  paramValues: PluginParamValues;
+  onParamChange: (key: string, value: string | number | boolean | null) => void;
+}
+
+/** 根据参数 schema 类型渲染对应的输入控件。 */
+function PluginParamControl({
+  paramKey,
+  schema,
+  value,
+  onChange,
+  disabled,
+}: {
+  paramKey: string;
+  schema: PluginParameterSchema;
+  value: string | number | boolean | null;
+  onChange: (value: string | number | boolean | null) => void;
+  disabled?: boolean;
+}) {
+  const id = `plugin-param-${paramKey}`;
+  const type = schema.type ?? 'string';
+  const label = schema.title || paramKey;
+  const hint = schema.description;
+
+  if (type === 'boolean') {
+    return (
+      <FormField label={label} hint={hint} fieldId={id}>
+        <Switch
+          checked={Boolean(value)}
+          onCheckedChange={onChange}
+          isDisabled={disabled}
+          aria-label={label}
+        />
+      </FormField>
+    );
+  }
+
+  if (type === 'number' || type === 'integer') {
+    return (
+      <FormField label={label} hint={hint} fieldId={id}>
+        <Input
+          id={id}
+          type="number"
+          inputMode={type === 'integer' ? 'numeric' : 'decimal'}
+          value={value === null || value === undefined ? '' : String(value)}
+          onValueChange={(v) => {
+            if (v === '') { onChange(null); return; }
+            const n = type === 'integer' ? parseInt(v, 10) : parseFloat(v);
+            onChange(Number.isNaN(n) ? null : n);
+          }}
+          isDisabled={disabled}
+          aria-label={label}
+          placeholder={hint}
+        />
+      </FormField>
+    );
+  }
+
+  return (
+    <FormField label={label} hint={hint} fieldId={id}>
+      <Input
+        id={id}
+        type="text"
+        value={value === null || value === undefined ? '' : String(value)}
+        onValueChange={(v) => onChange(v === '' ? null : v)}
+        isDisabled={disabled}
+        aria-label={label}
+        placeholder={hint}
+      />
+    </FormField>
+  );
 }
 
 function PluginCard({
@@ -535,6 +685,8 @@ function PluginCard({
   selected,
   onToggleSelected,
   selectable,
+  paramValues,
+  onParamChange,
 }: PluginCardProps) {
   const isRunning = plugin.status === 'running';
   const isReady = plugin.status === 'ready';
@@ -564,18 +716,22 @@ function PluginCard({
   // 查找该插件的运行中任务
   const runningTask = Object.entries(runningTasks).find(([_, v]) => v); // 简化：只要有进度就认为在跑
 
+  const schema = plugin.parametersSchema && typeof plugin.parametersSchema === 'object'
+    ? plugin.parametersSchema
+    : null;
+  const hasSchema = Boolean(schema && Object.keys(schema).length > 0);
+
   return (
     <Card className="overflow-hidden rounded-2xl border-divider bg-default-50/50">
       <CardHeader className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             {selectable && (
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={selected}
-                onChange={onToggleSelected}
-                className="h-4 w-4 shrink-0"
+                onCheckedChange={onToggleSelected}
                 aria-label={`选择插件 ${plugin.name}`}
+                className="shrink-0"
               />
             )}
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
@@ -597,16 +753,15 @@ function PluginCard({
           <div className="flex items-center gap-2 shrink-0">
             {isRunning && runningTask && (
               <div className="flex items-center gap-2 w-48">
-                <div className="flex-1 h-1.5 bg-default-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary transition-all"
-                    style={{ width: `${runningTask[1].progress * 100}%` }}
-                  />
-                </div>
+                <Progress
+                  value={runningTask[1].progress * 100}
+                  className="flex-1"
+                  label={`${plugin.name} 运行进度`}
+                />
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => onCancel(plugin.name, runningTask[0])}
+                  onPress={() => onCancel(plugin.name, runningTask[0])}
                   aria-label="取消任务"
                 >
                   <Square className="h-4 w-4" />
@@ -614,19 +769,19 @@ function PluginCard({
               </div>
             )}
             {isReady && selectedVideo && (
-              <Button size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+              <Button size="sm" onPress={() => onRun(plugin, selectedVideo)}>
                 <Play className="h-4 w-4 mr-1" aria-hidden="true" />
                 运行
               </Button>
             )}
             {isCrashed && selectedVideo && (
-              <Button variant="secondary" size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+              <Button variant="secondary" size="sm" onPress={() => onRun(plugin, selectedVideo)}>
                 <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
                 重试
               </Button>
             )}
             {(isRunning || isReady) && (
-              <Button variant="ghost" size="icon" onClick={() => onStop(plugin.name)} aria-label="停止插件">
+              <Button variant="ghost" size="icon" onPress={() => onStop(plugin.name)} aria-label="停止插件">
                 <Square className="h-4 w-4" />
               </Button>
             )}
@@ -634,30 +789,25 @@ function PluginCard({
         </div>
       </CardHeader>
 
-      {(() => {
-        const schema =
-          plugin.parametersSchema && typeof plugin.parametersSchema === 'object'
-            ? (plugin.parametersSchema as Record<string, any>)
-            : null;
-        if (!schema || Object.keys(schema).length === 0) return null;
-        return (
-          <CardBody className="px-4 pb-4 pt-0">
-            <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-              {Object.entries(schema).map(([key, s]: [string, any]) => (
-                <div key={key} className="space-y-1">
-                  <label className="text-xs font-medium text-default-400">{s.title || key}</label>
-                  <input
-                    type={s.type === 'number' ? 'number' : 'text'}
-                    defaultValue={s.default ?? ''}
-                    className="w-full h-8 px-2 text-xs bg-background border border-divider rounded-md"
-                    placeholder={s.description}
-                  />
-                </div>
+      {hasSchema && schema && (
+        <CardBody className="px-4 pb-4 pt-0">
+          <div className="space-y-4 rounded-xl border border-divider bg-background p-4">
+            <h4 className="text-xs font-semibold text-default-500">运行参数</h4>
+            <div className="grid gap-4 text-sm sm:grid-cols-2">
+              {Object.entries(schema).map(([key, s]) => (
+                <PluginParamControl
+                  key={key}
+                  paramKey={key}
+                  schema={s}
+                  value={paramValues[key] ?? null}
+                  onChange={(v) => onParamChange(key, v)}
+                  disabled={isRunning}
+                />
               ))}
             </div>
-          </CardBody>
-        );
-      })()}
+          </div>
+        </CardBody>
+      )}
 
       {plugin.statusDetail && (
         <CardBody className="px-4 pb-4 pt-0">

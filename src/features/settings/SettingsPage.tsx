@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Button, Card, Input, Label, Select, SelectItem, Switch } from '@/components/ui';
+import { Button, FormField as Field, FormSection as Section, Input, Select, SelectItem, Switch } from '@/components/ui';
 import { UpdatePanel } from '@/components/UpdatePanel';
 import { useAppStore } from '@/stores/app';
 import { isTauri } from '@/lib/ipc';
@@ -8,57 +8,6 @@ import type { ExportMode, Settings, Theme } from '@/types';
 import { AdvancedSettings } from './AdvancedSettings';
 import { mergeSettingsDraft, validateSettingsDraft, type SettingsErrors } from './settingsValidation';
 import { useDependencyInstaller } from './useDependencyInstaller';
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Card className="rounded-2xl border-divider bg-default-50/50 p-6">
-      <div className="mb-5">
-        <h2 className="text-base font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-default-500">{description}</p>
-      </div>
-      <div className="space-y-5">{children}</div>
-    </Card>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  fieldId,
-  error,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  fieldId?: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[180px_minmax(0,1fr)] sm:gap-4">
-      <div>
-        <Label htmlFor={fieldId}>{label}</Label>
-        {hint && <p className="mt-1 text-xs text-default-400">{hint}</p>}
-      </div>
-      <div>
-        {children}
-        {error && (
-          <p id={fieldId ? `${fieldId}-error` : undefined} role="alert" className="mt-1.5 text-sm text-danger">
-            {error}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
 
 const summaryLabels: Record<string, string> = {
   importDirectory: '默认导入目录',
