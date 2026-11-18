@@ -29,6 +29,7 @@
 | `formats/` | `mod.rs` | `video.txt`（OGM）/ `video.csv`（PR 标记）/ `video.xml`（FCP7）生成器 + golden file 测试 |
 | `ffmpeg/` | `mod.rs` | `export_segments`：流复制 `-c copy` 导出片段 |
 | `plugins/` | `manifest.rs` `manager.rs` `protocol.rs` `runtime.rs` | 插件清单校验、进程生命周期管理、JSON-RPC 协议、Sidecar spawn/stdio 通信 |
+| `plugins/package.rs` | `package.rs` | 本地 `.tppkg` / `.zip` 包校验、安全有界解压、暂存与覆盖恢复；`commands/plugins.rs::import_plugin` 通过版本化 IPC 暴露 |
 | `commands/updater.rs` | `updater.rs` | `get_updater_config`：返回版本化的更新器配置状态（schemaVersion/configured），由 Rust 侧读取合并后的插件 pubkey |
 | `ipc/` | `mod.rs` | `ImportProgressEvent`/`ExportProgressEvent` schema 定义（`SCHEMA_VERSION = "1.0.0"`） |
 | `lib.rs` | — | Tauri Builder：注册 14 个命令 + `PluginManager` setup |
@@ -103,6 +104,8 @@ MarksPage 勾选有效区间 → Tauri 选择输出目录 → invoke("export_seg
 选择/输出目录不新增持久化配置，详细行为与覆盖、部分失败限制见 [手动标注文档](manual-marks.md#从标注工作台导出片段)。
 
 ## 5. 插件生命周期
+
+本地插件包通过插件页按钮或拖放导入，经 `import_plugin` 在阻塞线程内读取、校验和安装到第一个已保存的自定义插件目录；没有目录时引导设置而非写入内置资源。校验成功后安全替换同名目录，调用 `PluginManager::reload` 并刷新列表。详见[本地插件包导入](plugin-import.md)。
 
 ```
 discovered → validated → started → ready → running → stopped | crashed

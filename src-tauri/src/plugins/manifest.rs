@@ -48,11 +48,14 @@ pub enum PluginRuntime {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginCapability {
+    #[serde(alias = "videoFrames")]
     VideoFrames,
+    #[serde(alias = "audioSamples")]
     AudioSamples,
     Metadata,
     Gpu,
     Network,
+    #[serde(alias = "fileWrite")]
     FileWrite,
 }
 
@@ -159,6 +162,27 @@ mod tests {
             entry: "main.py".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn capabilities_accept_local_spelling_and_protocol_camel_case() {
+        for (local, protocol, expected) in [
+            ("videoframes", "videoFrames", PluginCapability::VideoFrames),
+            (
+                "audiosamples",
+                "audioSamples",
+                PluginCapability::AudioSamples,
+            ),
+            ("filewrite", "fileWrite", PluginCapability::FileWrite),
+        ] {
+            for value in [local, protocol] {
+                let capability: PluginCapability =
+                    serde_json::from_value(serde_json::json!(value)).unwrap();
+                assert_eq!(capability, expected);
+                assert_eq!(serde_json::to_value(capability).unwrap(), local);
+            }
+        }
+        assert!(serde_json::from_value::<PluginCapability>(serde_json::json!("unknown")).is_err());
     }
 
     #[test]

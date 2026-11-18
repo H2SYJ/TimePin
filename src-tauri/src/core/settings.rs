@@ -143,7 +143,10 @@ fn validate_tool_path(field: &str, path: Option<&PathBuf>) -> Result<(), String>
     Ok(())
 }
 
-/// 设置文件写锁：串行化 save/update，避免设置文件被并行写丢字段。
+/// Serializes save/update and settings-based plugin transitions. Lock order is
+/// settings → install (if needed) → manager lifecycle → plugin/process.
+/// Plain reads stay lock-free (atomic rename), including RPC host callbacks:
+/// stopping a running process may wait for that RPC while holding this lock.
 static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -153,7 +156,7 @@ fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
     get_app_data_dir(app_handle).join(SETTINGS_FILE)
 }
 
-fn settings_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn settings_lock_guard() -> std::sync::MutexGuard<'static, ()> {
     SETTINGS_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -339,6 +342,45 @@ mod tests {
         settings.ffmpeg_path = None;
         settings.ffprobe_path = Some(PathBuf::from("ffprobe"));
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn plugin_snapshot_blocks_save_through_reload_without_blocking_plain_reads() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let initial = Settings::default();
+        write_settings_file(&path, &initial).unwrap();
+        let (saving_tx, saving_rx) = mpsc::channel();
+        let (saved_tx, saved_rx) = mpsc::channel();
+        let snapshot_guard = settings_lock_guard();
+        std::thread::scope(|scope| {
+            let saver = scope.spawn(|| {
+                saving_tx.send(()).unwrap();
+                let _guard = settings_lock_guard();
+                let changed = Settings {
+                    language: "en-US".into(),
+                    ..Settings::default()
+                };
+                write_settings_file(&path, &changed).unwrap();
+                saved_tx.send(()).unwrap();
+            });
+            saving_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(saved_rx.try_recv().is_err());
+            // RPC host services may still read atomically persisted settings
+            // while stop waits for their process lock; these reads must not lock.
+            let snapshot: Settings =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(snapshot.language, "zh-CN");
+            // This release represents the end of activation + reload + cleanup.
+            drop(snapshot_guard);
+            saver.join().unwrap();
+            saved_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let saved: Settings = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(saved.language, "en-US");
     }
 
     #[test]

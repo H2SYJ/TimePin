@@ -6,8 +6,43 @@ use crate::core::library::VideoInfo;
 use crate::ipc::SCHEMA_VERSION;
 use crate::plugins::manager::{PluginInfo, PluginManager, PluginRunFinished, EVENT_PLUGIN_RESULT};
 use crate::plugins::orchestrator::{OrchestrationRequest, OrchestrationResult, PluginOrchestrator};
+use crate::plugins::package::{
+    ImportPluginRequest, ImportPluginResult, ImportPluginSource, IMPORT_SCHEMA_VERSION,
+};
 use crate::plugins::runtime::PluginProcessError;
 use crate::plugins::PluginError;
+
+/// 导入本地 ZIP，完整校验后替换同名插件并热重载（停止所有运行中的插件）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn import_plugin(
+    app_handle: AppHandle,
+    manager: State<'_, PluginManager>,
+    source: ImportPluginSource,
+    schema_version: Option<String>,
+) -> Result<ImportPluginResult, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Keep this snapshot current until activation and environment cleanup finish.
+        let _settings_guard = crate::core::settings::settings_lock_guard();
+        let settings = crate::core::settings::load_settings(&app_handle)
+            .map_err(|e| format!("读取已保存设置失败：{e}"))?;
+        crate::plugins::package::import_package(
+            ImportPluginRequest {
+                source,
+                schema_version: schema_version.unwrap_or_else(|| IMPORT_SCHEMA_VERSION.to_owned()),
+            },
+            &settings.custom_plugin_dirs,
+            |install| {
+                manager.install_and_reload(
+                    &PluginManager::plugin_dirs(&app_handle, &settings.custom_plugin_dirs),
+                    || install.activate(),
+                )
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("插件导入任务失败：{e}"))?
+}
 
 pub fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
     let custom_dirs = crate::core::settings::load_settings(app)
@@ -105,16 +140,17 @@ pub async fn reload_plugins(
     app_handle: AppHandle,
     manager: State<'_, PluginManager>,
 ) -> Result<Vec<PluginInfo>, String> {
-    let dirs = plugin_dirs(&app_handle);
     let manager = manager.inner().clone();
-    let app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _settings_guard = crate::core::settings::settings_lock_guard();
+        let settings = crate::core::settings::load_settings(&app_handle)
+            .map_err(|e| format!("读取设置失败：{e}"))?;
+        let dirs = PluginManager::plugin_dirs(&app_handle, &settings.custom_plugin_dirs);
         manager.reload(&dirs);
-        let settings = crate::core::settings::load_settings(&app).ok();
-        manager.list(settings.as_ref())
+        Ok(manager.list(Some(&settings)))
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 /// 单插件环境建置结果（供前端展示）
@@ -135,6 +171,7 @@ pub async fn rebuild_plugin_environments(
     let manager = manager.inner().clone();
     let app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _settings_guard = crate::core::settings::settings_lock_guard();
         let settings =
             crate::core::settings::load_settings(&app).map_err(|e| format!("读取设置失败：{e}"))?;
         let results = manager.rebuild_environments(&settings);

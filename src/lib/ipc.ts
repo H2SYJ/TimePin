@@ -16,6 +16,8 @@ import type {
   EnvRebuildResult,
   PluginEnvProgress,
   PluginInfo,
+  PluginImportSource,
+  PluginImportResult,
   PluginResult,
   Settings,
   UpdaterConfig,
@@ -213,6 +215,25 @@ export const api = {
   async reloadPlugins(): Promise<PluginInfo[]> {
     if (!isTauri()) return [];
     return tauriInvoke<PluginInfo[]>('reload_plugins');
+  },
+
+  async importPlugin(source: PluginImportSource): Promise<PluginImportResult> {
+    if (!isTauri()) throw new Error('插件导入需要在 TimePin 桌面应用中运行');
+    return tauriInvoke<PluginImportResult>('import_plugin', { source, schemaVersion: '1.0' });
+  },
+
+  async pickPluginPackage(): Promise<string | null> {
+    if (!isTauri()) throw new Error('文件选择需要在 TimePin 桌面应用中运行');
+    const selected = await open({
+      multiple: false,
+      title: '选择插件包',
+      filters: [{ name: 'TimePin 插件包', extensions: ['tppkg', 'zip'] }],
+    });
+    if (Array.isArray(selected)) {
+      if (selected.length > 1) throw new Error('一次只能导入一个插件包');
+      return selected[0] ?? null;
+    }
+    return selected;
   },
 
   /** 重建所有 Python 插件的虚拟环境。返回每个插件的建置结果。 */

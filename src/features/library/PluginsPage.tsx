@@ -1,10 +1,11 @@
 import { Card, CardBody, CardHeader, Button, Badge, Section, Field, Input, Select, SelectItem, Switch } from '@/components/ui';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Tab, Tabs } from '@heroui/react';
 import { GitHubPluginDiscovery } from './GitHubPluginDiscovery';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
-import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code } from 'lucide-react';
+import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code, UploadCloud } from 'lucide-react';
+import { usePluginImport } from './usePluginImport';
 import { cn } from '@/lib/utils';
 import { inferParamKind, type PluginParamSchema } from '@/types';
 
@@ -18,12 +19,7 @@ export function PluginsPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [paramValues, setParamValues] = useState<Record<string, Record<string, unknown>>>({});
 
-  useEffect(() => {
-    loadPlugins();
-    setupEventListeners();
-  }, []);
-
-  const loadPlugins = async () => {
+  const loadPlugins = useCallback(async () => {
     setLoading(true);
     try {
       const list = await api.getPlugins();
@@ -38,21 +34,40 @@ export function PluginsPage() {
         }
         return next;
       });
+      return true;
     } catch (e) {
       console.error('加载插件列表失败:', e);
+      return false;
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const setupEventListeners = async () => {
-    const unlistenProgress = await api.onPluginProgress((e) => {
+  const refreshAfterImport = useCallback(async () => {
+    // import_plugin 已重新加载管理器并停止全部运行中的插件。
+    setRunningTasks({});
+    return loadPlugins();
+  }, [loadPlugins]);
+  const packageImport = usePluginImport(activeTab === 'local', refreshAfterImport);
+  const firstPluginDirectory = settings.customPluginDirs?.[0]?.trim();
+
+  useEffect(() => {
+    void loadPlugins();
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const subscribe = (registration: Promise<() => void>) => {
+      void registration.then((unlisten) => {
+        if (disposed) unlisten();
+        else unlisteners.push(unlisten);
+      }).catch((error: unknown) => console.error('插件事件监听失败:', error));
+    };
+    subscribe(api.onPluginProgress((e) => {
       setRunningTasks((prev) => ({
         ...prev,
         [e.taskId]: { progress: e.progress, message: e.message || '' },
       }));
-    });
-    const unlistenStatus = await api.onPluginStatus((e) => {
+    }));
+    subscribe(api.onPluginStatus((e) => {
       setPlugins((prev) =>
         prev.map((p) =>
           p.name === e.pluginName
@@ -60,11 +75,11 @@ export function PluginsPage() {
             : p
         )
       );
-    });
-    const unlistenLog = await api.onPluginLog((e) => {
+    }));
+    subscribe(api.onPluginLog((e) => {
       setLogs((prev) => [...prev.slice(-99), `[${e.level.toUpperCase()}] ${e.pluginName}: ${e.message}`]);
-    });
-    const unlistenResult = await api.onPluginResult((e) => {
+    }));
+    subscribe(api.onPluginResult((e) => {
       setRunningTasks((prev) => {
         const next = { ...prev };
         delete next[e.taskId];
@@ -77,14 +92,12 @@ export function PluginsPage() {
       } else if (e.outcome === 'error') {
         setLogs((prev) => [...prev.slice(-99), `[ERROR] ${e.pluginName}: ${e.error}`]);
       }
-    });
+    }));
     return () => {
-      unlistenProgress();
-      unlistenStatus();
-      unlistenLog();
-      unlistenResult();
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
     };
-  };
+  }, [loadPlugins]);
 
   const handleReload = async () => {
     setLoading(true);
@@ -166,10 +179,16 @@ export function PluginsPage() {
           </p>
         </div>
         {activeTab === 'local' && (
-          <Button variant="secondary" onPress={handleReload} isDisabled={loading}>
-            <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
-            重新加载
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onPress={handleReload} isDisabled={loading || packageImport.busy}>
+              <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
+              重新加载
+            </Button>
+            <Button onPress={() => void packageImport.pickPackage()} isDisabled={packageImport.busy} isLoading={packageImport.busy}>
+              {!packageImport.busy && <UploadCloud className="h-4 w-4" aria-hidden="true" />}
+              {packageImport.busy ? '正在导入…' : '导入插件'}
+            </Button>
+          </div>
         )}
       </header>
 
@@ -188,6 +207,54 @@ export function PluginsPage() {
           <Tab key="local" title="本地插件">
             <div className="scrollbar-thin h-full overflow-y-auto px-8 py-6">
               <div className="w-full min-w-0 space-y-5 pb-8">
+                <div
+                  role="region"
+                  aria-label="插件包拖放区域"
+                  aria-busy={packageImport.busy}
+                  className={cn(
+                    'flex min-h-36 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-6 text-center transition-colors',
+                    packageImport.dragging ? 'border-primary bg-primary/10' : 'border-divider/60 bg-default-50/50',
+                  )}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (activeTab === 'local' && !packageImport.busy) packageImport.setDragging(true);
+                  }}
+                  onDragLeave={() => packageImport.setDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    packageImport.setDragging(false);
+                    void packageImport.importFiles(Array.from(event.dataTransfer.files));
+                  }}
+                >
+                  <UploadCloud className="h-6 w-6 text-primary" aria-hidden="true" />
+                  <div>
+                    <p className="text-sm font-medium">{packageImport.busy ? '正在导入插件，请稍候…' : '将插件包拖放到这里，或使用「导入插件」按钮'}</p>
+                    <p className="mt-1 text-sm text-default-500">支持 .tppkg / .zip，一次一个，压缩包最大 128 MiB。</p>
+                  </div>
+                  <p className="text-sm text-default-600">仅导入信任的包。导入会覆盖同名插件，并重新加载、停止所有正在运行的插件。</p>
+                  {firstPluginDirectory ? (
+                    <p className="max-w-full break-all text-sm text-default-500">导入到第一个已保存的自定义插件目录：{firstPluginDirectory}</p>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-warning">
+                      <span>请先添加并保存自定义插件目录，不会写入内置目录。</span>
+                      <Button size="sm" variant="secondary" onPress={() => useAppStore.getState().setPage('settings')}>前往设置</Button>
+                    </div>
+                  )}
+                </div>
+                {packageImport.feedback && (
+                  <p
+                    role={packageImport.feedback.kind === 'success' ? 'status' : 'alert'}
+                    className={cn(
+                      'rounded-2xl border px-4 py-3 text-sm',
+                      packageImport.feedback.kind === 'success' && 'border-success/40 bg-success/[0.06] text-success',
+                      packageImport.feedback.kind === 'error' && 'border-danger/40 bg-danger/[0.06] text-danger',
+                      packageImport.feedback.kind === 'warning' && 'border-warning/40 bg-warning/[0.06] text-warning',
+                    )}
+                  >
+                    {packageImport.feedback.message}
+                  </p>
+                )}
                 {loading ? (
                   <div className="flex flex-col items-center gap-3 py-16 text-default-400" role="status">
                     <Loader2 className="h-6 w-6 animate-spin" aria-hidden="true" />
@@ -208,6 +275,7 @@ export function PluginsPage() {
                         plugin={plugin}
                         selectedVideo={selectedVideo}
                         runningTasks={runningTasks}
+                        importing={packageImport.busy}
                         paramValues={paramValues[plugin.name] ?? {}}
                         onParamChange={handleParamChange}
                         onRun={handleRun}
@@ -266,6 +334,7 @@ interface PluginSectionProps {
   plugin: any;
   selectedVideo: any;
   runningTasks: Record<string, { progress: number; message: string }>;
+  importing: boolean;
   paramValues: Record<string, unknown>;
   onParamChange: (pluginName: string, key: string, value: unknown) => void;
   onRun: (plugin: any, video: any) => void;
@@ -277,6 +346,7 @@ function PluginSection({
   plugin,
   selectedVideo,
   runningTasks,
+  importing,
   paramValues,
   onParamChange,
   onRun,
@@ -347,13 +417,13 @@ function PluginSection({
             </div>
           )}
           {isReady && selectedVideo && (
-            <Button size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+            <Button size="sm" isDisabled={importing} onClick={() => onRun(plugin, selectedVideo)}>
               <Play className="h-4 w-4 mr-1" aria-hidden="true" />
               运行
             </Button>
           )}
           {isCrashed && (
-            <Button variant="secondary" size="sm" onClick={() => onRun(plugin, selectedVideo)}>
+            <Button variant="secondary" size="sm" isDisabled={importing} onClick={() => onRun(plugin, selectedVideo)}>
               <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
               重试
             </Button>

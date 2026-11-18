@@ -6,24 +6,12 @@
 use crate::core::github::{
     api_url, ErrorCode, GitHubApiError, GitHubClient, GitHubRateInfo, GitHubResponse, GitHubSession,
 };
+use crate::plugins::archive::{extract_zip, ExtractionLimits, Layout, EXTRACTION_LIMITS};
 use serde::{Deserialize, Serialize};
-use std::io::{Cursor, Read};
-use std::path::{Component, Path, PathBuf};
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use tauri::{command, Emitter, State};
-use zip::ZipArchive;
 const SEARCH_QUERY: &str = "topic:time-pin-plugins";
-
-#[derive(Clone, Copy)]
-struct ExtractionLimits {
-    entries: usize,
-    entry_bytes: u64,
-    total_bytes: u64,
-}
-const EXTRACTION_LIMITS: ExtractionLimits = ExtractionLimits {
-    entries: 10_000,
-    entry_bytes: 128 * 1024 * 1024,
-    total_bytes: 512 * 1024 * 1024,
-};
 
 /// IPC models use camelCase; GitHub's wire models below deliberately do not.
 #[derive(Debug, Clone, Serialize)]
@@ -453,73 +441,12 @@ fn extract_zip_with_limits(
     target_dir: &Path,
     limits: ExtractionLimits,
 ) -> Result<(), String> {
-    let mut archive =
-        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|_| "解析 ZIP 失败".to_owned())?;
-    if archive.len() > limits.entries {
-        return Err("ZIP 条目数量超过安全限制".into());
-    }
-    let mut extracted_bytes = 0;
-    let mut archive_root: Option<String> = None;
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|_| "读取 ZIP 条目失败".to_owned())?;
-        let name = file.name().to_owned();
-        let parts: Vec<_> = name.trim_end_matches('/').split('/').collect();
-        if name.starts_with('/')
-            || name.contains(['\\', ':', '\0'])
-            || parts
-                .iter()
-                .any(|part| part.is_empty() || matches!(*part, "." | ".."))
-            || file
-                .unix_mode()
-                .is_some_and(|mode| mode & 0o170000 == 0o120000)
-        {
-            return Err("ZIP 包含不安全的条目".into());
-        }
-        if let Some(root) = &archive_root {
-            if root != parts[0] {
-                return Err("ZIP 顶层目录不一致".into());
-            }
-        } else {
-            archive_root = Some(parts[0].to_owned());
-        }
-        if file.is_dir() {
-            continue;
-        }
-        if parts.len() < 2 {
-            return Err("ZIP 文件不在仓库根目录内".into());
-        }
-        let relative: PathBuf = parts[1..].iter().collect();
-        if !relative
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-        {
-            return Err("ZIP 路径不合法".into());
-        }
-        let out = target_dir.join(relative);
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| "创建插件子目录失败".to_owned())?;
-        }
-        let allowed = limits
-            .entry_bytes
-            .min(limits.total_bytes.saturating_sub(extracted_bytes));
-        if file.size() > allowed {
-            return Err("ZIP 解压大小超过安全限制".into());
-        }
-        let mut output = std::fs::File::create(&out).map_err(|_| "创建插件文件失败".to_owned())?;
-        // Stream to disk and check actual bytes as well as the untrusted ZIP size metadata.
-        let copied = std::io::copy(
-            &mut (&mut file).take(allowed.saturating_add(1)),
-            &mut output,
-        )
-        .map_err(|_| "读取或写入 ZIP 内容失败".to_owned())?;
-        if copied > allowed {
-            return Err("ZIP 解压大小超过安全限制".into());
-        }
-        extracted_bytes += copied;
-    }
-    Ok(())
+    extract_zip(
+        Cursor::new(zip_bytes),
+        target_dir,
+        Layout::StripSingleRoot,
+        limits,
+    )
 }
 
 fn safe_plugin_name(name: &str) -> bool {
@@ -531,58 +458,77 @@ fn safe_plugin_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
-/// Download and validation finish before touching an existing install. Rename failure rolls
-/// back the old directory; a throttle/network failure never creates backups or empty installs.
-fn activate_archive(
-    zip: &[u8],
-    manifest: &PluginManifest,
-    primary: &Path,
-) -> Result<PathBuf, GitHubApiError> {
-    if !safe_plugin_name(&manifest.name) {
-        return Err(GitHubApiError::client("插件名称不能作为安全目录名"));
-    }
-    std::fs::create_dir_all(primary).map_err(|_| GitHubApiError::client("创建插件根目录失败"))?;
-    // Discovery scans only direct children. Keep transaction folders one level deeper so
-    // neither a retained backup nor an interrupted staging directory can shadow a plugin.
-    let workspace = primary.join(".timepin-installs");
-    std::fs::create_dir_all(&workspace)
-        .map_err(|_| GitHubApiError::client("创建插件事务目录失败"))?;
-    let staging = workspace.join(format!("stage-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&staging).map_err(|_| GitHubApiError::client("创建插件暂存目录失败"))?;
-    let result = (|| {
-        extract_zip_to_dir(zip, &staging).map_err(GitHubApiError::client)?;
-        let text = std::fs::read_to_string(staging.join("plugin.json"))
-            .map_err(|_| GitHubApiError::client("解压后未找到有效的 plugin.json"))?;
-        let extracted = PluginManifest::parse(&text).map_err(GitHubApiError::client)?;
-        let local = extracted.to_local().map_err(GitHubApiError::client)?;
-        if extracted.name != manifest.name || !local.validate().is_empty() {
-            return Err(GitHubApiError::client(
-                "归档中的 manifest 与安装目标不匹配或校验失败",
-            ));
-        }
-        let target = primary.join(&manifest.name);
-        let backup = workspace.join(format!("{}.bak-{}", manifest.name, uuid::Uuid::new_v4()));
-        let had_existing = target.exists();
+struct PreparedArchive {
+    staging: PathBuf,
+    workspace: PathBuf,
+    target: PathBuf,
+    backup: PathBuf,
+}
+
+impl PreparedArchive {
+    fn activate(self) -> Result<PathBuf, GitHubApiError> {
+        let had_existing = self.target.exists();
         if had_existing {
-            std::fs::rename(&target, &backup)
+            std::fs::rename(&self.target, &self.backup)
                 .map_err(|_| GitHubApiError::client("备份旧插件目录失败"))?;
         }
-        if std::fs::rename(&staging, &target).is_err() {
-            if had_existing && std::fs::rename(&backup, &target).is_err() {
+        if std::fs::rename(&self.staging, &self.target).is_err() {
+            if had_existing && std::fs::rename(&self.backup, &self.target).is_err() {
                 return Err(GitHubApiError::client(
                     "安装切换失败，旧插件已保留在 .timepin-installs 下的 .bak 目录，请手动恢复",
                 ));
             }
             return Err(GitHubApiError::client("安装切换失败，旧插件已恢复"));
         }
-        Ok(target)
-    })();
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(staging);
+        Ok(self.target.clone())
     }
-    // Only remove an empty transaction root; retained backups are never deleted here.
-    let _ = std::fs::remove_dir(workspace);
-    result
+}
+
+impl Drop for PreparedArchive {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.staging);
+        // Retained recovery backups are intentional; remove only an empty workspace.
+        let _ = std::fs::remove_dir(&self.workspace);
+    }
+}
+
+/// Caller holds the shared install lock from staging through stop/switch/reload.
+/// Downloads finish before taking any settings, install or lifecycle locks.
+fn prepare_archive(
+    zip: &[u8],
+    manifest: &PluginManifest,
+    primary: &Path,
+) -> Result<PreparedArchive, GitHubApiError> {
+    if !safe_plugin_name(&manifest.name) {
+        return Err(GitHubApiError::client("插件名称不能作为安全目录名"));
+    }
+    std::fs::create_dir_all(primary).map_err(|_| GitHubApiError::client("创建插件根目录失败"))?;
+    // Transactions live below direct discovery children.
+    let workspace = primary.join(".timepin-installs");
+    std::fs::create_dir_all(&workspace)
+        .map_err(|_| GitHubApiError::client("创建插件事务目录失败"))?;
+    let staging = workspace.join(format!("stage-{}", uuid::Uuid::new_v4()));
+    if std::fs::create_dir(&staging).is_err() {
+        let _ = std::fs::remove_dir(&workspace);
+        return Err(GitHubApiError::client("创建插件暂存目录失败"));
+    }
+    let install = PreparedArchive {
+        staging,
+        target: primary.join(&manifest.name),
+        backup: workspace.join(format!("{}.bak-{}", manifest.name, uuid::Uuid::new_v4())),
+        workspace,
+    };
+    extract_zip_to_dir(zip, &install.staging).map_err(GitHubApiError::client)?;
+    let text = std::fs::read_to_string(install.staging.join("plugin.json"))
+        .map_err(|_| GitHubApiError::client("解压后未找到有效的 plugin.json"))?;
+    let extracted = PluginManifest::parse(&text).map_err(GitHubApiError::client)?;
+    let local = extracted.to_local().map_err(GitHubApiError::client)?;
+    if extracted.name != manifest.name || !local.validate().is_empty() {
+        return Err(GitHubApiError::client(
+            "归档中的 manifest 与安装目标不匹配或校验失败",
+        ));
+    }
+    Ok(install)
 }
 
 #[command(rename_all = "camelCase")]
@@ -620,15 +566,24 @@ pub async fn install_github_plugin(
     let url = api_url(&["repos", &owner, &repo, "zipball", &branch], &[])?;
     let archive = client.public_zip(url).await?;
     let plugin_name = manifest.name.clone();
+    let activation_name = plugin_name.clone();
+    let manager = manager.inner().clone();
+    let app = app_handle.clone();
     let plugin_dir = tauri::async_runtime::spawn_blocking(move || {
-        activate_archive(&archive.body, &manifest, &primary)
+        let _settings_guard = crate::core::settings::settings_lock_guard();
+        let settings = crate::core::settings::load_settings(&app)
+            .map_err(|e| GitHubApiError::client(format!("读取设置失败：{e}")))?;
+        let _install_guard =
+            crate::plugins::package::install_lock_guard().map_err(GitHubApiError::client)?;
+        let install = prepare_archive(&archive.body, &manifest, &primary)?;
+        let dirs =
+            crate::plugins::manager::PluginManager::plugin_dirs(&app, &settings.custom_plugin_dirs);
+        // TPIN-18: a GitHub install only replaces its own plugin entry and
+        // must not stop every plugin the way a local package import does.
+        manager.install_and_register_new(&activation_name, &dirs, || install.activate())
     })
     .await
     .map_err(|_| GitHubApiError::client("插件安装任务失败"))??;
-    // The archive is on disk now; register it without stopping running plugins
-    // so `get_plugins` reflects the install immediately after this call returns.
-    let plugin_dirs = crate::commands::plugins::plugin_dirs(&app_handle);
-    manager.register_new(&plugin_dirs);
     let _ = app_handle.emit(
         crate::plugins::manager::EVENT_PLUGIN_STATUS,
         serde_json::json!({ "pluginName": plugin_name, "status": "ready", "detail": "installed via GitHub" }),
@@ -658,6 +613,81 @@ mod tests {
 
     fn valid_manifest() -> PluginManifest {
         PluginManifest::parse(r#"{"protocolVersion":"1.0.0","name":"example-plugin","version":"1.0.0","description":"test","author":"test","entry":"main.py","runtime":"python","capabilities":["metadata"],"parametersSchema":{},"outputSchema":{}}"#).unwrap()
+    }
+
+    fn activate_archive(
+        zip: &[u8],
+        manifest: &PluginManifest,
+        primary: &Path,
+    ) -> Result<PathBuf, GitHubApiError> {
+        let _guard =
+            crate::plugins::package::install_lock_guard().map_err(GitHubApiError::client)?;
+        prepare_archive(zip, manifest, primary)?.activate()
+    }
+
+    #[test]
+    fn github_activation_waits_for_local_import_reload_on_the_same_root() {
+        use base64::Engine;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut local_manifest = valid_manifest();
+        local_manifest.version = "local".into();
+        let local_json = serde_json::to_vec(&local_manifest).unwrap();
+        let local_zip = build_zip(&[("plugin.json", &local_json), ("main.py", b"local")]);
+        let request = serde_json::from_value(serde_json::json!({
+            "source": {
+                "base64": base64::engine::general_purpose::STANDARD.encode(local_zip),
+                "fileName": "local.tppkg"
+            }
+        }))
+        .unwrap();
+        let manifest = valid_manifest();
+        let json = serde_json::to_vec(&manifest).unwrap();
+        let github_zip = build_zip(&[("root/plugin.json", &json), ("root/main.py", b"github")]);
+        let (reloading_tx, reloading_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let primary = root.path();
+        std::thread::scope(|scope| {
+            let local = scope.spawn(move || {
+                crate::plugins::package::import_package(
+                    request,
+                    &[primary.to_path_buf()],
+                    |install| {
+                        let result = install.activate()?;
+                        reloading_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                        Ok(result)
+                    },
+                )
+                .unwrap();
+            });
+            reloading_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let github = scope.spawn(|| {
+                attempting_tx.send(()).unwrap();
+                activate_archive(&github_zip, &manifest, root.path()).unwrap();
+                completed_tx.send(()).unwrap();
+            });
+            attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(completed_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err());
+            assert_eq!(
+                std::fs::read(root.path().join("example-plugin/main.py")).unwrap(),
+                b"local"
+            );
+            release_tx.send(()).unwrap();
+            local.join().unwrap();
+            github.join().unwrap();
+            completed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        assert_eq!(
+            std::fs::read(root.path().join("example-plugin/main.py")).unwrap(),
+            b"github"
+        );
     }
 
     #[test]

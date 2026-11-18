@@ -51,6 +51,7 @@ pub fn run() {
             crate::commands::formats::generate_txt_chapters,
             crate::commands::formats::generate_csv_markers,
             crate::commands::formats::export_segments,
+            crate::commands::plugins::import_plugin,
             crate::commands::plugins::get_plugins,
             crate::commands::plugins::reload_plugins,
             crate::commands::plugins::rebuild_plugin_environments,

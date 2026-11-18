@@ -7,9 +7,11 @@
 //! - `orchestrator`：M4 多插件编排（串/并行、批量视频、结果合并去重、失败隔离）
 //! - `recognition`：识别服务客户端（模板匹配、OCR、目标检测、预览、ROI）
 
+pub(crate) mod archive;
 pub mod manager;
 pub mod manifest;
 pub mod orchestrator;
+pub mod package;
 pub mod protocol;
 pub mod python_env;
 pub mod recognition;
