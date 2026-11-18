@@ -124,7 +124,10 @@ export function PluginsPage() {
       return;
     }
     const taskId = `task-${Date.now()}`;
-    const outputDir = `${settings.importDirectory || '.'}/plugin-output/${plugin.name}/${taskId}`;
+    // 未配置导入目录时退化为相对路径 `.` 会导致插件校验拒绝（要求绝对路径）。
+    // 这里改用一个明确的占位名，让 Rust 侧基于 cwd 拼成绝对路径后落到可识别的目录。
+    const baseDir = settings.importDirectory || 'plugin-output';
+    const outputDir = `${baseDir}/plugin-output/${plugin.name}/${taskId}`;
     try {
       setRunningTasks((prev) => ({ ...prev, [taskId]: { progress: 0, message: '启动中...' } }));
       const result = await api.runPlugin(plugin.name, video, paramValues[plugin.name] ?? {}, outputDir);

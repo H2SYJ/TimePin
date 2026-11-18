@@ -21,11 +21,17 @@ pub fn init(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 获取应用数据目录
+///
+/// `app_data_dir()` 返回 None 时退化到当前工作目录的 **绝对路径**，
+/// 避免下游把 `.` 传给插件时触发 `path must be absolute` 校验。
 pub fn get_app_data_dir(app_handle: &AppHandle) -> PathBuf {
     app_handle
         .path()
         .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+        })
 }
 
 /// Default user plugin search root. Restoring defaults never moves existing plugins.

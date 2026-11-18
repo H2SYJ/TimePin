@@ -561,6 +561,12 @@ impl PluginManager {
         params: serde_json::Value,
         output_dir: PathBuf,
     ) -> Result<(String, PluginResult), PluginError> {
+        // 防御性规范化：插件协议要求 video.path 和 outputDir 必须是绝对路径。
+        // 前端可能传入相对路径（如 `.` 或相对片段），在 Windows 上会导致插件校验失败。
+        let video_path = normalize_absolute_path(&video.path)
+            .map_err(|e| PluginError::Task(format!("video.path 无效: {e}")))?;
+        let output_dir = normalize_absolute_path(&output_dir)
+            .map_err(|e| PluginError::Task(format!("outputDir 无效: {e}")))?;
         let settings_guard = crate::core::settings::settings_lock_guard();
         let settings = crate::core::settings::load_settings(&self.app)
             .map_err(|e| PluginError::Task(format!("读取设置失败：{e}")))?;
@@ -587,7 +593,7 @@ impl PluginManager {
             task_id: task_id.clone(),
             video: RunVideoInfo {
                 id: video.id.clone(),
-                path: video.path.clone(),
+                path: video_path.clone(),
                 duration: video.duration,
                 width: video.width,
                 height: video.height,
@@ -618,8 +624,8 @@ impl PluginManager {
         // 构建 run 生命周期内的宿主反向服务处理器（frames.extract）。
         // 只在 frame_service 实现存在时注入；当前 FrameService 由子代理并行开发，
         // 若模块尚未就位则以 `cfg` 软连接，避免阻塞主代码编译。
-        let video_path = video.path.clone();
-        let host_handler = self.build_host_service_handler(video_path, output_dir.clone());
+        let video_path_clone = video_path.clone();
+        let host_handler = self.build_host_service_handler(video_path_clone, output_dir.clone());
         // 长 RPC 在生命周期/设置锁外执行，保证 cancel/stop/reload 在运行期间可达。
         let result = process_guard.run_with_host_services(
             serde_json::to_value(&run_params).map_err(|e| PluginError::Task(e.to_string()))?,
@@ -810,6 +816,22 @@ pub fn merge_marks(marks: Vec<Mark>, epsilon: f64) -> Vec<Mark> {
 /// 序列化版本常量（供插件 manifest 默认）
 pub const fn protocol_version() -> &'static str {
     PROTOCOL_VERSION
+}
+
+/// 把任意输入路径规范化为绝对路径。
+///
+/// - 绝对路径：直接返回（Windows 下 `\\?\` 前缀、盘符、UNC 都视为绝对）。
+/// - 相对路径：基于当前工作目录拼接为绝对路径，不 canonicalize（避免要求文件已存在）。
+///
+/// 用于防御前端或旧代码传入相对路径导致插件校验失败的情况。
+fn normalize_absolute_path(path: &std::path::Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map_err(|e| format!("无法获取当前工作目录: {e}"))
+    }
 }
 
 fn merge_plugin_dirs(
