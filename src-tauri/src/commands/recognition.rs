@@ -57,7 +57,7 @@ fn recognition_manifest(service_dir: &std::path::Path) -> PluginManifest {
         protocol_version: crate::plugins::PROTOCOL_VERSION.to_string(),
         name: "timepin-recognition".to_string(),
         version: "0.1.0".to_string(),
-        description: "内置识别服务".to_string(),
+        description: crate::plugins::manifest::LocalizedText::Text("内置识别服务".to_string()),
         author: "TimePin".to_string(),
         entry: "main.py".to_string(),
         runtime: PluginRuntime::Python,

@@ -7,6 +7,7 @@ import { api } from '@/lib/ipc';
 import { Loader2, Play, Square, RotateCcw, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Code } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { inferParamKind, type PluginParamSchema } from '@/types';
+import { resolveLocalizedText } from '@/lib/localization';
 
 export function PluginsPage() {
   const { settings } = useAppStore();
@@ -206,6 +207,7 @@ export function PluginsPage() {
                       <PluginSection
                         key={plugin.name}
                         plugin={plugin}
+                        language={settings.language}
                         selectedVideo={selectedVideo}
                         runningTasks={runningTasks}
                         paramValues={paramValues[plugin.name] ?? {}}
@@ -264,6 +266,7 @@ export function PluginsPage() {
 
 interface PluginSectionProps {
   plugin: any;
+  language: string;
   selectedVideo: any;
   runningTasks: Record<string, { progress: number; message: string }>;
   paramValues: Record<string, unknown>;
@@ -275,6 +278,7 @@ interface PluginSectionProps {
 
 function PluginSection({
   plugin,
+  language,
   selectedVideo,
   runningTasks,
   paramValues,
@@ -314,7 +318,7 @@ function PluginSection({
   return (
     <Section
       title={plugin.name}
-      description={`${plugin.description} · v${plugin.version} · ${plugin.author}`}
+      description={`${resolveLocalizedText(plugin.description, language)} · v${plugin.version} · ${plugin.author}`}
       trailing={
         <div className="flex items-center gap-2 shrink-0">
           <Badge
@@ -372,6 +376,7 @@ function PluginSection({
           pluginName={plugin.name}
           paramKey={key}
           schema={schema}
+          language={language}
           value={paramValues[key] ?? schema.default ?? ''}
           onChange={(value) => onParamChange(plugin.name, key, value)}
         />
@@ -384,12 +389,15 @@ interface PluginParamFieldProps {
   pluginName: string;
   paramKey: string;
   schema: PluginParamSchema;
+  language: string;
   value: unknown;
   onChange: (value: unknown) => void;
 }
 
-function PluginParamField({ paramKey, schema, value, onChange }: PluginParamFieldProps) {
+function PluginParamField({ paramKey, schema, language, value, onChange }: PluginParamFieldProps) {
   const kind = inferParamKind(schema);
+  const title = resolveLocalizedText(schema.title, language) || paramKey;
+  const hint = resolveLocalizedText(schema.description, language) || undefined;
 
   const handleNumberChange = (v: string) => {
     const num = Number(v);
@@ -397,12 +405,12 @@ function PluginParamField({ paramKey, schema, value, onChange }: PluginParamFiel
   };
 
   return (
-    <Field label={schema.title || paramKey} hint={schema.description}>
+    <Field label={title} hint={hint}>
       {kind === 'boolean' && (
         <Switch
           checked={Boolean(value)}
           onCheckedChange={(checked) => onChange(checked)}
-          label={schema.title || paramKey}
+          label={title}
         />
       )}
       {kind === 'number' && (

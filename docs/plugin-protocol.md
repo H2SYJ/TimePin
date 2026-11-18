@@ -141,7 +141,7 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
   "protocolVersion": "1.0.0",
   "name": "my-plugin",           // ASCII [a-zA-Z0-9_-]，目录内唯一
   "version": "0.1.0",
-  "description": "…",
+  "description": "…",             // 可本地化：字符串或 locale→string 映射
   "author": "…",
   "entry": "main.py",            // 相对路径，禁止绝对路径与 ".."
   "runtime": "python",           // python | node | rust | binary
@@ -157,6 +157,39 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
 ```
 
 校验规则见 `src-tauri/src/plugins/manifest.rs::validate()`。
+
+### 可本地化文本（LocalizedText）
+
+`description`（清单级）与 `parametersSchema.<param>.title` / `.description`（参数级）
+接受两种写法，向后完全兼容：
+
+```json
+// 1) 普通字符串（旧格式，行为不变）
+"description": "生成演示标注"
+
+// 2) locale -> text 映射
+"description": {
+  "en-US": "Generate demo marks",
+  "zh-CN": "生成演示标注"
+}
+```
+
+**解析 / 回退顺序**（前端按 `settings.language` 实时解析，无需重启或重取插件列表）：
+
+1. `map[settings.language]` —— 用户当前界面语言
+2. `map["en-US"]` —— 英文兜底
+3. 映射中**第一个条目** —— 按 `plugin.json` 文档中的书写顺序
+4. `""` —— 空映射或未定义
+
+Rust 端 `manifest.rs::LocalizedText` 保留 JSON 对象的插入顺序（`Vec<(locale, text)>`），
+保证"第一个条目"回退稳定可测；序列化时字符串仍回写为字符串、映射仍回写为映射。
+映射值必须是字符串，其他类型（数字 / 布尔 / 嵌套对象）在 manifest 解析阶段即被拒绝。
+前端解析统一走 `src/lib/localization.ts::resolveLocalizedText`，消费点包括
+`PluginsPage`（插件描述 `Section.description`、参数 `Field.label`/`hint`、`Switch.label`）与
+`GitHubPluginDiscovery`（参数徽章 `schema.title`）。
+
+**非目标**：`enum` 值不做本地化（枚举值是程序标识而非显示文案，`default` 值也保持原样）。
+`name`、`entry`、`outputSchema` 等字段仍要求字符串，不参与本地化。
 
 ### Python 运行时与依赖
 

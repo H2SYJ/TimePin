@@ -111,7 +111,8 @@ pub struct PluginManifest {
     pub protocol_version: String,
     pub name: String,
     pub version: String,
-    pub description: String,
+    /// 本地化文本（字符串或 locale→string 映射），与本地 manifest 一致
+    pub description: crate::plugins::manifest::LocalizedText,
     pub author: String,
     pub entry: String,
     pub runtime: String,

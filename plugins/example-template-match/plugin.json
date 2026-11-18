@@ -2,7 +2,10 @@
   "protocolVersion": "1.0.0",
   "name": "example-template-match",
   "version": "0.1.0",
-  "description": "示例插件：演示 TimePin 插件协议（JSON-RPC over stdio）。读取视频元数据，按参数在时间轴上生成演示标注，并把接收到的参数原样写入证据文件。真实模板匹配（OpenCV）将在 M3 GUI 识别工具中提供。",
+  "description": {
+    "en-US": "Example plugin: demonstrates the TimePin plugin protocol (JSON-RPC over stdio). Reads video metadata, emits demo marks on the timeline per parameters, and echoes received parameters into an evidence file. Real template matching (OpenCV) ships with the M3 GUI recognition tools.",
+    "zh-CN": "示例插件：演示 TimePin 插件协议（JSON-RPC over stdio）。读取视频元数据，按参数在时间轴上生成演示标注，并把接收到的参数原样写入证据文件。真实模板匹配（OpenCV）将在 M3 GUI 识别工具中提供。"
+  },
   "author": "TimePin Team",
   "entry": "main.py",
   "runtime": "python",
@@ -11,15 +14,24 @@
   "parametersSchema": {
     "intervalSeconds": {
       "type": "number",
-      "title": "标注间隔（秒）",
-      "description": "每隔多少秒生成一个演示标注点",
+      "title": {
+        "en-US": "Mark interval (seconds)",
+        "zh-CN": "标注间隔（秒）"
+      },
+      "description": {
+        "en-US": "Generate one demo mark every N seconds",
+        "zh-CN": "每隔多少秒生成一个演示标注点"
+      },
       "default": 30,
       "minimum": 1,
       "maximum": 600
     },
     "label": {
       "type": "string",
-      "title": "标注前缀",
+      "title": {
+        "en-US": "Mark label prefix",
+        "zh-CN": "标注前缀"
+      },
       "default": "示例标注"
     }
   },

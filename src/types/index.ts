@@ -150,11 +150,17 @@ export interface PluginCapability {
   type: string;
 }
 
+/**
+ * 可本地化文本：普通字符串，或 `locale -> text` 映射。
+ * 解析顺序见 `resolveLocalizedText`：settings.language -> "en-US" -> 映射首个条目 -> ""。
+ */
+export type LocalizedText = string | Record<string, string>;
+
 export interface PluginManifest {
   protocolVersion: string;
   name: string;
   version: string;
-  description: string;
+  description: LocalizedText;
   author: string;
   entry: string;
   runtime: 'python' | 'rust' | 'node' | 'binary';
@@ -169,8 +175,8 @@ export interface PluginManifest {
 
 export interface PluginParameterSchema {
   type?: 'string' | 'number' | 'integer' | 'boolean';
-  title?: string;
-  description?: string;
+  title?: LocalizedText;
+  description?: LocalizedText;
   default?: string | number | boolean | null;
 }
 
@@ -187,7 +193,7 @@ export interface PluginEnvStatus {
 export interface PluginInfo {
   name: string;
   version: string;
-  description: string;
+  description: LocalizedText;
   author: string;
   runtime: string;
   capabilities: string[];
@@ -218,8 +224,8 @@ export interface EnvRebuildResult {
 /** 插件参数 JSON Schema 定义 */
 export interface PluginParamSchema {
   type?: 'string' | 'number' | 'integer' | 'boolean' | 'array';
-  title?: string;
-  description?: string;
+  title?: LocalizedText;
+  description?: LocalizedText;
   default?: unknown;
   enum?: unknown[];
   items?: { enum?: unknown[] };
