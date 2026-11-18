@@ -250,36 +250,44 @@ async fn fetch_plugin_manifest(
         &["repos", owner, repo, "contents", "plugin.json"],
         &[("ref", branch)],
     )?;
-    let response = match client.public_get(url).await {
+    let response = match client
+        .public_manifest_get(url, |body| parse_manifest_body(body).is_ok())
+        .await
+    {
         Ok(response) => response,
         Err(error) if error.code == ErrorCode::NotFoundOrPrivate => {
             return Ok((None, error.rate_limit.map(|rate| *rate)))
         }
         Err(error) => return Err(error),
     };
-    let file: FileContent = parse_response(&response, "GitHub 文件")?;
-    let parse = || -> Result<PluginManifest, String> {
-        if file.encoding != "base64" {
-            return Err("plugin.json 编码不是 base64".into());
-        }
-        // GitHub inserts line breaks into base64 contents responses.
-        let compact: String = file
-            .content
-            .chars()
-            .filter(|c| !c.is_ascii_whitespace())
-            .collect();
-        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, compact)
-            .map_err(|_| "plugin.json Base64 内容无效".to_owned())?;
-        let text = String::from_utf8(decoded).map_err(|_| "plugin.json 不是 UTF-8".to_owned())?;
-        PluginManifest::parse(&text)
-    };
-    parse()
+    // The same parser runs under the client's session lock BEFORE persistence.
+    // Parsing again here preserves the existing typed result and error messages;
+    // no post-request eviction can race a token switch or remove another bucket.
+    parse_manifest_body(&response.body)
         .map(|manifest| (Some(manifest), response.rate_limit.clone()))
         .map_err(|message| {
             let mut error = GitHubApiError::client(message);
             error.rate_limit = response.rate_limit.map(Box::new);
             error
         })
+}
+
+fn parse_manifest_body(body: &[u8]) -> Result<PluginManifest, String> {
+    let file: FileContent =
+        serde_json::from_slice(body).map_err(|_| "GitHub 文件响应格式不正确".to_owned())?;
+    if file.encoding != "base64" {
+        return Err("plugin.json 编码不是 base64".into());
+    }
+    // GitHub inserts line breaks into base64 contents responses.
+    let compact: String = file
+        .content
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, compact)
+        .map_err(|_| "plugin.json Base64 内容无效".to_owned())?;
+    let text = String::from_utf8(decoded).map_err(|_| "plugin.json 不是 UTF-8".to_owned())?;
+    PluginManifest::parse(&text)
 }
 
 fn validate_repository(owner: &str, repo: &str) -> Result<(), GitHubApiError> {
