@@ -19,14 +19,49 @@ interface DiscoveryCache {
   page: number;
   plugins: DiscoveredPlugin[];
   totalCount: number;
-  rateLimit: GitHubRateInfo | null;
+  /** 缓存写入时的身份；身份变更后不再提供旧凭据派生的远端数据。 */
+  identity: GitHubSession['identity'];
+  rateLimits: GitHubRateInfo[];
 }
 let discoveryCache: DiscoveryCache | null = null;
+// 仅保留已完成安装的本地副作用，不将旧身份的远端仓库元数据带到新身份。
+const installedPluginPaths = new Map<string, string>();
 
 /** 测试辅助：重置模块级横幅确认与内存缓存（仅测试使用）。 */
 export function __resetGitHubDiscoverySessionState() {
   primaryLimitBannerAcked = false;
   discoveryCache = null;
+  installedPluginPaths.clear();
+}
+
+function resourceLabel(resource: string | null): string {
+  if (resource === 'search') return 'Search API';
+  if (resource === 'core') return 'Core API';
+  return resource ? `${resource} API` : 'API（资源未知）';
+}
+
+function getRateLimits(snapshot: { rateLimit: GitHubRateInfo | null; rateLimits?: GitHubRateInfo[] }): GitHubRateInfo[] {
+  return snapshot.rateLimits?.length ? snapshot.rateLimits : snapshot.rateLimit ? [snapshot.rateLimit] : [];
+}
+
+function mergeRateLimits(previous: GitHubRateInfo[], incoming: GitHubRateInfo[]): GitHubRateInfo[] {
+  const byResource = new Map(previous.map((rate) => [rate.resource, rate]));
+  incoming.forEach((rate) => byResource.set(rate.resource, rate));
+  return [...byResource.values()];
+}
+
+/** 与主限流同族的本地等待错误（PRIMARY / RATE_WAIT 且有 reset/retry 时间）按资源桶隔离；
+ *  secondary、unknown、无 retryAt 的停止状态一律保守全局。 */
+function rateErrorScope(error: GitHubApiError): 'search' | 'core' | 'global' {
+  const resource = error.rateLimit?.resource;
+  if (
+    (error.code === 'PRIMARY_RATE_LIMIT' || error.code === 'RATE_WAIT') &&
+    (resource === 'search' || resource === 'core') &&
+    error.retryAt != null
+  ) {
+    return resource;
+  }
+  return 'global';
 }
 
 function isGitHubApiError(e: unknown): e is GitHubApiError {
@@ -60,7 +95,8 @@ interface GitHubPluginCardProps {
   plugin: DiscoveredPlugin;
   onInstall: (plugin: DiscoveredPlugin) => void;
   installing: Set<string>;
-  networkDisabled: boolean;
+  installDisabled: boolean;
+  onOpenTokenPanel: () => void;
 }
 
 /** 按声明能力评估风险等级（high/medium/low） */
@@ -92,7 +128,11 @@ function getCapabilityRisk(manifest: DiscoveredPlugin['manifest']): { level: 'hi
   return { level, label, color, reasons };
 }
 
-function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: GitHubPluginCardProps) {
+function isOfficialOwner(owner: DiscoveredPlugin['repository']['owner']): boolean {
+  return owner.login.toLowerCase() === 'h2syj';
+}
+
+function GitHubPluginCard({ plugin, onInstall, installing, installDisabled, onOpenTokenPanel }: GitHubPluginCardProps) {
   const { repository, manifest, manifestError, isInstalled } = plugin;
   const isInstalling = installing.has(repository.fullName);
   const [expanded, setExpanded] = useState(false);
@@ -100,16 +140,18 @@ function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: Gi
   const [consentChecked, setConsentChecked] = useState(false);
 
   const risk = getCapabilityRisk(manifest);
+  const showPrivateRepoHint =
+    plugin.verification === 'unverified' && !manifest && !isOfficialOwner(repository.owner);
 
   const handleInstallClick = () => {
-    if (!networkDisabled && !isInstalled && !isInstalling && manifest) {
+    if (!installDisabled && !isInstalled && !isInstalling && manifest) {
       setConsentChecked(false);
       setShowConsent(true);
     }
   };
 
   const handleConfirmInstall = () => {
-    if (consentChecked && !networkDisabled) {
+    if (consentChecked && !installDisabled) {
       setShowConsent(false);
       onInstall(plugin);
     }
@@ -168,6 +210,20 @@ function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: Gi
                 )}
               </div>
               <p className="mt-1 truncate text-xs text-default-400">{repository.fullName}</p>
+              {showPrivateRepoHint && (
+                <p className="mt-1 text-xs text-default-400">
+                  可能为私有仓库，
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto min-w-0 px-0 text-xs text-primary underline underline-offset-2"
+                    onClick={onOpenTokenPanel}
+                  >
+                    配置 Token
+                  </Button>
+                  {' 后可尝试访问'}
+                </p>
+              )}
               {repository.description && (
                 <p className="mt-1 line-clamp-2 text-sm text-default-500">{repository.description}</p>
               )}
@@ -203,7 +259,7 @@ function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: Gi
                 variant="primary"
                 size="sm"
                 onClick={handleInstallClick}
-                disabled={!manifest || networkDisabled}
+                disabled={!manifest || installDisabled}
               >
                 <Download className="mr-1 h-4 w-4" aria-hidden="true" />
                 安装
@@ -349,7 +405,7 @@ function GitHubPluginCard({ plugin, onInstall, installing, networkDisabled }: Gi
           plugin={plugin}
           risk={risk}
           checked={consentChecked}
-          disabled={networkDisabled}
+          disabled={installDisabled}
           onCheckedChange={setConsentChecked}
           onConfirm={handleConfirmInstall}
           onCancel={() => setShowConsent(false)}
@@ -481,11 +537,19 @@ interface TokenPanelProps {
   networkDisabled: boolean;
   onSubmit: (candidate: string, remember: boolean) => void;
   onCancel: () => void;
+  focusRequest: number;
 }
 
-function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel }: TokenPanelProps) {
+function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel, focusRequest }: TokenPanelProps) {
   const [candidate, setCandidate] = useState('');
   const [remember, setRemember] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // 再次点击卡片入口时也应定位到现有面板，不清空正在编辑的候选值。
+  useEffect(() => {
+    containerRef.current?.scrollIntoView?.({ block: 'nearest' });
+    containerRef.current?.querySelector<HTMLInputElement>('input[type="password"]')?.focus();
+  }, [focusRequest]);
 
   const handleSubmit = () => {
     const trimmed = candidate.trim();
@@ -494,7 +558,7 @@ function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel }: 
   };
 
   return (
-    <Card className="rounded-2xl border-divider bg-default-50/50 p-4" role="form" aria-label="配置 GitHub Token">
+    <Card ref={containerRef} className="rounded-2xl border-divider bg-default-50/50 p-4" role="form" aria-label="配置 GitHub Token">
       <div className="flex flex-col gap-3">
         <div className="flex items-start gap-2">
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
@@ -562,10 +626,17 @@ type PendingRetry =
   | { kind: 'search'; page: number }
   | { kind: 'install'; plugin: DiscoveredPlugin };
 
+type RequestScope = 'search' | 'core' | 'global';
+
 interface RequestBlock {
+  scope: RequestScope;
   retryAt: number | null;
-  /** 已确认且未混入其他冷却的主限流；提交时另行确认实际请求身份为匿名。 */
+  /** 只有明确资源归属的主限流可保留匿名候选校验例外。 */
   allowCandidate: boolean;
+}
+
+function isActiveBlock(block: RequestBlock): boolean {
+  return block.retryAt == null || block.retryAt > Date.now();
 }
 
 function isRateLimitError(error: GitHubApiError): boolean {
@@ -573,22 +644,24 @@ function isRateLimitError(error: GitHubApiError): boolean {
 }
 
 export function GitHubPluginDiscovery() {
-  const [plugins, setPlugins] = useState<DiscoveredPlugin[]>(discoveryCache?.plugins ?? []);
+  // 在确认当前身份前，不把上一次挂载的凭据派生数据呈现给用户。
+  const [plugins, setPlugins] = useState<DiscoveredPlugin[]>([]);
   const [viewingCache, setViewingCache] = useState(false);
   const [installError, setInstallError] = useState<GitHubApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(discoveryCache?.page ?? 1);
-  const [totalCount, setTotalCount] = useState(discoveryCache?.totalCount ?? 0);
-  const [rateLimit, setRateLimit] = useState<GitHubRateInfo | null>(discoveryCache?.rateLimit ?? null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [rateLimits, setRateLimits] = useState<GitHubRateInfo[]>([]);
   const [session, setSession] = useState<GitHubSession | null>(null);
   const [error, setError] = useState<GitHubApiError | null>(null);
   const [showTokenPanel, setShowTokenPanel] = useState(false);
+  const [tokenFocusRequest, setTokenFocusRequest] = useState(0);
   const [tokenSubmitting, setTokenSubmitting] = useState(false);
   const [tokenClearing, setTokenClearing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [showLimitBanner, setShowLimitBanner] = useState(false);
-  const [requestBlock, setRequestBlock] = useState<RequestBlock | null>(null);
+  const [requestBlocks, setRequestBlocks] = useState<RequestBlock[]>([]);
 
   const mountedRef = useRef(true);
   const initialPageRef = useRef(page);
@@ -599,30 +672,36 @@ export function GitHubPluginDiscovery() {
   const pendingRetryRef = useRef<PendingRetry | null>(null);
   const credentialMutationRef = useRef(false);
   const sessionRef = useRef<GitHubSession | null>(null);
-  const requestBlockRef = useRef<RequestBlock | null>(null);
+  const requestBlocksRef = useRef<RequestBlock[]>([]);
   const installingRef = useRef(new Set<string>());
   // 本次会话确认安装的结果优先于可能更早拍摄的远端/本地发现快照。
-  const installedPathsRef = useRef(new Map<string, string>(
-    (discoveryCache?.plugins ?? []).flatMap((plugin) =>
-      plugin.isInstalled && plugin.localPath ? [[plugin.repository.fullName, plugin.localPath]] : [],
-    ),
-  ));
-
-  const updateRequestBlock = useCallback((block: RequestBlock | null) => {
-    requestBlockRef.current = block;
-    setRequestBlock(block);
+  const installedPathsRef = useRef(installedPluginPaths);
+  const rateLimitsRef = useRef<GitHubRateInfo[]>([]);
+  const updateRateLimits = useCallback((next: GitHubRateInfo[] | ((prev: GitHubRateInfo[]) => GitHubRateInfo[])) => {
+    const resolved = typeof next === 'function' ? next(rateLimitsRef.current) : next;
+    rateLimitsRef.current = resolved;
+    setRateLimits(resolved);
   }, []);
 
-  const isRequestBlocked = useCallback(() => {
-    const block = requestBlockRef.current;
-    return block != null && (block.retryAt == null || block.retryAt > Date.now());
+  const updateRequestBlocks = useCallback((next: RequestBlock[] | ((previous: RequestBlock[]) => RequestBlock[])) => {
+    const blocks = typeof next === 'function' ? next(requestBlocksRef.current) : next;
+    requestBlocksRef.current = blocks;
+    setRequestBlocks(blocks);
+  }, []);
+
+  const isBlockedScope = useCallback((scope: 'search' | 'core') => {
+    return requestBlocksRef.current.some((block) =>
+      isActiveBlock(block) && (block.scope === 'global' || block.scope === scope),
+    );
   }, []);
 
   const canValidateCandidate = () => {
-    return !isRequestBlocked() || (
-      requestBlockRef.current?.allowCandidate === true &&
-      (sessionRef.current?.identity === 'ANONYMOUS' || sessionRef.current?.identity === 'TOKEN_INVALID')
-    );
+    const active = requestBlocksRef.current.filter(isActiveBlock);
+    if (active.some((block) => block.scope === 'global')) return false;
+    const core = active.find((block) => block.scope === 'core');
+    // /user 不使用 search 桶；core 主限流仍保留新匿名候选身份的例外，但不能绕过全局保护。
+    return core == null || (core.allowCandidate &&
+      (sessionRef.current?.identity === 'ANONYMOUS' || sessionRef.current?.identity === 'TOKEN_INVALID'));
   };
 
   const invalidateCredentialRequests = useCallback(() => {
@@ -631,13 +710,40 @@ export function GitHubPluginDiscovery() {
     requestSeqRef.current += 1;
     inFlightRef.current = null;
     setLoading(false);
-  }, []);
+    // 身份变更后旧凭据派生的远端数据不可信：丢弃缓存与配额快照，但保留已安装的本地副作用与全局停止。
+    discoveryCache = null;
+    if (mountedRef.current) {
+      setViewingCache(false);
+      setPlugins([]);
+      setTotalCount(0);
+    }
+    updateRateLimits([]);
+    updateRequestBlocks((blocks) => blocks.filter((block) => block.scope === 'global'));
+    setShowLimitBanner(false);
+  }, [updateRateLimits, updateRequestBlocks]);
 
   const applySession = useCallback((next: GitHubSession) => {
+    const previousIdentity = sessionRef.current?.identity;
     sessionRef.current = next;
     setSession(next);
+    if (previousIdentity == null) {
+      if (discoveryCache?.identity === next.identity) {
+        setPlugins(discoveryCache.plugins);
+        setTotalCount(discoveryCache.totalCount);
+        updateRateLimits(mergeRateLimits(discoveryCache.rateLimits, getRateLimits(next)));
+      } else {
+        discoveryCache = null;
+        updateRateLimits(getRateLimits(next));
+      }
+    } else if (previousIdentity !== next.identity) {
+      // 身份/配额快照随身份走：旧身份的快照不再可信。
+      updateRateLimits(getRateLimits(next));
+      if (discoveryCache && discoveryCache.identity !== next.identity) discoveryCache = null;
+    } else {
+      updateRateLimits((prev) => mergeRateLimits(prev, getRateLimits(next)));
+    }
     if (next.identity === 'TOKEN_INVALID') setShowTokenPanel(true);
-  }, []);
+  }, [updateRateLimits]);
 
   const refreshSession = useCallback(async (generation = generationRef.current, failedOperation?: PendingRetry) => {
     if (generation !== generationRef.current) return;
@@ -659,31 +765,37 @@ export function GitHubPluginDiscovery() {
   }, [applySession, invalidateCredentialRequests]);
 
   const recordFailure = useCallback((apiError: GitHubApiError, operation?: PendingRetry, candidateValidation = false) => {
-    if (apiError.rateLimit) setRateLimit(apiError.rateLimit);
-    const primaryLimit = !candidateValidation && apiError.code === 'PRIMARY_RATE_LIMIT';
+    if (!candidateValidation && apiError.code === 'AUTH_INVALID') {
+      // 活跃凭据被 401 撤销：立即使所有旧请求/缓存失效，不等待后续会话查询。
+      invalidateCredentialRequests();
+    }
+    const rate = apiError.rateLimit;
+    if (rate && !candidateValidation) updateRateLimits((prev) => mergeRateLimits(prev, [rate]));
+    const scope = rateErrorScope(apiError);
+    const primaryLimit = !candidateValidation && apiError.code === 'PRIMARY_RATE_LIMIT' && scope !== 'global';
     const anonymousPrimary = primaryLimit &&
       (sessionRef.current?.identity === 'ANONYMOUS' || sessionRef.current?.identity === 'TOKEN_INVALID');
     if (isRateLimitError(apiError) || (apiError.retryAt != null && apiError.retryAt > Date.now())) {
-      const previous = isRequestBlocked() ? requestBlockRef.current : null;
-      // 并行错误不能缩短等待，也不能把 secondary/unknown 停止状态变成可绕过的主限流。
-      updateRequestBlock({
-        retryAt: previous
-          ? previous.retryAt == null || apiError.retryAt == null ? null : Math.max(previous.retryAt, apiError.retryAt)
-          : apiError.retryAt,
-        // Eligibility is primary-only evidence; the current identity is checked when
-        // submitting, including TOKEN_INVALID which sends requests anonymously.
-        allowCandidate: primaryLimit && (previous?.allowCandidate ?? true),
+      updateRequestBlocks((blocks) => {
+        const active = blocks.filter(isActiveBlock);
+        const previous = active.find((block) => block.scope === scope);
+        // 不同资源的等待独立到期；同资源并发错误不能缩短等待，全局停止也不会被资源错误覆盖。
+        return [...active.filter((block) => block.scope !== scope), {
+          scope,
+          retryAt: previous
+            ? previous.retryAt == null || apiError.retryAt == null ? null : Math.max(previous.retryAt, apiError.retryAt)
+            : apiError.retryAt,
+          allowCandidate: primaryLimit && (previous?.allowCandidate ?? true),
+        }];
       });
     }
-    if (operation && (anonymousPrimary || apiError.code === 'AUTH_INVALID')) {
-      pendingRetryRef.current = operation;
-    }
+    if (operation && (anonymousPrimary || apiError.code === 'AUTH_INVALID')) pendingRetryRef.current = operation;
     if (apiError.code === 'AUTH_INVALID') setShowTokenPanel(true);
     if (anonymousPrimary && !primaryLimitBannerAcked) {
       primaryLimitBannerAcked = true;
       setShowLimitBanner(true);
     }
-  }, [isRequestBlocked, updateRequestBlock]);
+  }, [invalidateCredentialRequests, updateRateLimits, updateRequestBlocks]);
 
   const applyResult = useCallback((targetPage: number, result: DiscoverPluginsResult) => {
     const merged = result.plugins.map((plugin) => {
@@ -692,13 +804,21 @@ export function GitHubPluginDiscovery() {
     });
     setPlugins(merged);
     setTotalCount(result.totalCount);
-    setRateLimit(result.rateLimit);
+    const incoming = getRateLimits(result);
+    updateRateLimits((prev) => mergeRateLimits(prev, incoming));
+    const snapshot = mergeRateLimits(rateLimitsRef.current, incoming);
     setViewingCache(false);
-    discoveryCache = { page: targetPage, plugins: merged, totalCount: result.totalCount, rateLimit: result.rateLimit };
-  }, []);
+    discoveryCache = {
+      page: targetPage,
+      plugins: merged,
+      totalCount: result.totalCount,
+      identity: sessionRef.current?.identity ?? 'ANONYMOUS',
+      rateLimits: snapshot,
+    };
+  }, [updateRateLimits]);
 
   const loadPlugins = useCallback(async (targetPage: number) => {
-    if (isRequestBlocked() || credentialMutationRef.current) return;
+    if (isBlockedScope('search') || credentialMutationRef.current) return;
     const generation = generationRef.current;
     // StrictMode 同代次去重；新凭据永远不能复用旧匿名 Promise。
     const key = `discover:${generation}:${targetPage}`;
@@ -720,6 +840,7 @@ export function GitHubPluginDiscovery() {
         failedOperation = { kind: 'search', page: targetPage };
         setError(apiError);
         recordFailure(apiError, failedOperation);
+        if (apiError.code === 'AUTH_INVALID') void refreshSession(generationRef.current, failedOperation);
       } finally {
         if (inFlightRef.current?.key === key) inFlightRef.current = null;
         if (mountedRef.current && generation === generationRef.current && seq === requestSeqRef.current) {
@@ -730,7 +851,7 @@ export function GitHubPluginDiscovery() {
     })();
     inFlightRef.current = { key, promise };
     return promise;
-  }, [applyResult, isRequestBlocked, recordFailure, refreshSession]);
+  }, [applyResult, isBlockedScope, recordFailure, refreshSession]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -749,14 +870,17 @@ export function GitHubPluginDiscovery() {
   }, [loadPlugins, refreshSession]);
 
   useEffect(() => {
-    if (requestBlock?.retryAt == null) return; // 没有可靠等待时间时保持停止，不猜测配额/重试时间。
-    const timer = setTimeout(() => updateRequestBlock(null), Math.max(0, requestBlock.retryAt - Date.now()));
+    const deadlines = requestBlocks.flatMap((block) => block.retryAt == null ? [] : [block.retryAt]);
+    if (deadlines.length === 0) return; // 无可靠时间的停止状态保持原样，不猜测恢复时间。
+    const timer = setTimeout(() => {
+      updateRequestBlocks((blocks) => blocks.filter(isActiveBlock));
+    }, Math.max(0, Math.min(...deadlines) - Date.now()));
     return () => clearTimeout(timer);
-  }, [requestBlock, updateRequestBlock]);
+  }, [requestBlocks, updateRequestBlocks]);
 
   const handleInstall = async (plugin: DiscoveredPlugin, retry = false) => {
     const name = plugin.repository.fullName;
-    if (isRequestBlocked() || credentialMutationRef.current || installingRef.current.has(name) || installedPathsRef.current.has(name)) return;
+    if (isBlockedScope('core') || credentialMutationRef.current || installingRef.current.has(name) || installedPathsRef.current.has(name)) return;
     const generation = generationRef.current;
     installingRef.current.add(name);
     setInstalling(new Set(installingRef.current));
@@ -767,9 +891,9 @@ export function GitHubPluginDiscovery() {
         repo: plugin.repository.name,
         branch: plugin.repository.defaultBranch,
       });
-      if (!mountedRef.current) return;
-      // 安装的本地副作用即使跨身份发生也必须保留。
+      // 安装的本地副作用即使跨身份或组件卸载发生也必须保留。
       installedPathsRef.current.set(name, result);
+      if (!mountedRef.current) return;
       const merge = (items: DiscoveredPlugin[]) => items.map((item) =>
         item.repository.fullName === name ? { ...item, isInstalled: true, localPath: result } : item,
       );
@@ -782,6 +906,7 @@ export function GitHubPluginDiscovery() {
       failedOperation = retry ? undefined : { kind: 'install', plugin };
       setInstallError(apiError);
       recordFailure(apiError, failedOperation);
+      if (apiError.code === 'AUTH_INVALID') void refreshSession(generationRef.current, failedOperation);
     } finally {
       installingRef.current.delete(name);
       if (mountedRef.current) {
@@ -800,15 +925,16 @@ export function GitHubPluginDiscovery() {
     setTokenError(null);
     try {
       const next = await api.configureGitHubToken(candidate, remember);
+      // 后端身份已改变，即使面板在校验期间卸载，也不能留下旧凭据派生的模块缓存。
+      discoveryCache = null;
       if (!mountedRef.current) return;
       invalidateCredentialRequests();
       applySession(next);
-      setRateLimit(next.rateLimit);
       setShowTokenPanel(false);
       setShowLimitBanner(false);
       setError(null);
       setInstallError(null);
-      if (requestBlockRef.current?.allowCandidate) updateRequestBlock(null);
+      // invalidateCredentialRequests 已移除旧身份的资源等待，但保留并发到达的全局停止。
       const pending = pendingRetryRef.current;
       pendingRetryRef.current = null; // 消费原上下文，重试失败不重新武装安装。
       credentialMutationRef.current = false;
@@ -841,6 +967,7 @@ export function GitHubPluginDiscovery() {
     setTokenClearing(true);
     try {
       const next = await api.clearGitHubToken();
+      discoveryCache = null;
       if (!mountedRef.current) return;
       invalidateCredentialRequests();
       applySession(next);
@@ -858,18 +985,34 @@ export function GitHubPluginDiscovery() {
 
   const handleRefresh = () => { void loadPlugins(page); };
   const handlePageChange = (targetPage: number) => {
-    if (loading || viewingCache || isRequestBlocked() || credentialMutationRef.current) return;
+    if (loading || viewingCache || isBlockedScope('search') || credentialMutationRef.current) return;
     void loadPlugins(targetPage);
   };
 
+  const openTokenPanelWithFocus = useCallback(() => {
+    setTokenError(null);
+    setShowTokenPanel(true);
+    setTokenFocusRequest((request) => request + 1);
+  }, []);
+
   const identity = session?.identity ?? 'ANONYMOUS';
   const isAnonymous = identity === 'ANONYMOUS';
-  const softQuotaWarning = isAnonymous && rateLimit?.remaining != null && rateLimit.remaining < 10;
+  // 搜索入口的温和预警使用 search 快照，不让后续 manifest 的 core 响应覆盖它。
+  const searchRateSnapshot = rateLimits.find((rate) => rate.resource === 'search')
+    ?? rateLimits.find((rate) => rate.resource == null)
+    ?? null;
+  const softQuotaWarning = isAnonymous && searchRateSnapshot?.remaining != null && searchRateSnapshot.remaining < 10;
   const searchRateLimited = error != null && isRateLimitError(error);
-  const networkDisabled = isRequestBlocked() || tokenSubmitting || tokenClearing;
-  const refreshDisabled = loading || networkDisabled;
+  const searchBlocked = isBlockedScope('search');
+  const installBlocked = isBlockedScope('core');
+  const activeBlocks = requestBlocks.filter(isActiveBlock);
+  const searchBlock = activeBlocks.find((block) => block.scope === 'global')
+    ?? activeBlocks.find((block) => block.scope === 'search');
+  const refreshDisabled = loading || searchBlocked || tokenSubmitting || tokenClearing;
+  const installDisabled = installBlocked || tokenSubmitting || tokenClearing;
   const tokenValidationDisabled = tokenClearing || !canValidateCandidate();
-  const retryBlockedUntil = requestBlock?.retryAt ?? null;
+  const retryBlockedUntil = searchBlock?.retryAt ?? null;
+  const primaryError = [error, installError].find((failure) => failure?.code === 'PRIMARY_RATE_LIMIT');
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto px-8 pb-8 pt-6">
@@ -933,6 +1076,7 @@ export function GitHubPluginDiscovery() {
       {/* Token 配置面板（渐进披露） */}
       {showTokenPanel && (
         <TokenPanel
+          focusRequest={tokenFocusRequest}
           submitting={tokenSubmitting}
           error={tokenError}
           networkDisabled={tokenValidationDisabled}
@@ -946,13 +1090,14 @@ export function GitHubPluginDiscovery() {
         </p>
       )}
       {!showTokenPanel && tokenError && <p className="text-xs text-danger" role="alert">{tokenError}</p>}
-      {isRequestBlocked() && (
-        <p className="text-xs text-warning" role="status">
-          请求已暂停。{retryBlockedUntil != null
-            ? `请等待至 ${formatResetTime(retryBlockedUntil)} 后手动重试。`
+      {activeBlocks.map((block) => (
+        <p key={block.scope} className="text-xs text-warning" role="status">
+          {block.scope === 'global' ? '请求已暂停。' : `${resourceLabel(block.scope)} 请求已暂停。`}
+          {block.retryAt != null
+            ? `请等待至 ${formatResetTime(block.retryAt)} 后手动重试。`
             : '服务未提供可靠的恢复时间。请按错误提示操作；若本次会话已停止，请稍后重启应用。'}
         </p>
-      )}
+      ))}
 
       {/* 匿名主限流：会话单次横幅（含校准后的 reset 时间） */}
       {showLimitBanner && (
@@ -962,8 +1107,8 @@ export function GitHubPluginDiscovery() {
             <div className="min-w-0 flex-1 text-sm text-warning">
               <p className="font-medium">GitHub API 请求次数已达上限</p>
               <p className="mt-1 text-xs">
-                {rateLimit?.resetAt != null
-                  ? `预计 ${formatResetTime(rateLimit.resetAt)} 后重置。`
+                {primaryError?.rateLimit?.resetAt != null
+                  ? `预计 ${formatResetTime(primaryError.rateLimit.resetAt)} 后重置。`
                   : '请稍后重试。'}
                 你可以配置 Token 提高限额、稍后等解禁后手动刷新，或查看当前会话中已加载的缓存结果。
               </p>
@@ -1022,23 +1167,28 @@ export function GitHubPluginDiscovery() {
         </Card>
       )}
 
-      {/* 速率限制信息（仅展示响应头数据，不硬编码配额口径） */}
-      {rateLimit && (rateLimit.remaining != null || rateLimit.resetAt != null) && (
-        <div className="flex items-center gap-2 text-xs text-default-500">
+      {/* 速率限制信息（仅展示响应头数据，不硬编码配额口径）；各资源桶独立显示。 */}
+      {rateLimits.some((rate) => rate.remaining != null || rate.resetAt != null) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-default-500">
           <Info className="h-3 w-3" aria-hidden="true" />
-          {rateLimit.remaining != null && <span>API 剩余调用: {rateLimit.remaining}</span>}
-          {rateLimit.resetAt != null && (
-            <>
-              <span>·</span>
-              <span>重置于: {formatResetTime(rateLimit.resetAt)}</span>
-            </>
-          )}
-          {isAnonymous && (
-            <>
-              <span>·</span>
-              <span>匿名访问限额较低，配置 Token 可提升</span>
-            </>
-          )}
+          {rateLimits
+            .filter((rate) => rate.remaining != null || rate.resetAt != null)
+            .map((rate) => (
+              <span key={rate.resource ?? 'unknown'} className="flex items-center gap-1">
+                {rate.remaining != null && (
+                  <span>
+                    {resourceLabel(rate.resource)} 剩余: {rate.remaining}
+                    {rate.limit != null ? `/${rate.limit}` : ''}
+                  </span>
+                )}
+                {rate.resetAt != null && (
+                  <span className="text-default-400">
+                    {rate.remaining != null ? '· ' : ''}重置于: {formatResetTime(rate.resetAt)}
+                  </span>
+                )}
+              </span>
+            ))}
+          {isAnonymous && <span>匿名访问限额较低，配置 Token 可提升</span>}
         </div>
       )}
 
@@ -1046,7 +1196,7 @@ export function GitHubPluginDiscovery() {
       {softQuotaWarning && !searchRateLimited && (
         <div className="flex items-center gap-2 text-xs text-warning" role="status">
           <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-          <span>匿名 API 额度即将用尽（剩余 {rateLimit?.remaining}），建议配置 Token。</span>
+          <span>匿名 API 额度即将用尽（剩余 {searchRateSnapshot?.remaining}），建议配置 Token。</span>
         </div>
       )}
 
@@ -1158,8 +1308,9 @@ export function GitHubPluginDiscovery() {
               key={plugin.repository.fullName}
               plugin={plugin}
               onInstall={handleInstall}
-              networkDisabled={networkDisabled}
+              installDisabled={installDisabled}
               installing={installing}
+              onOpenTokenPanel={openTokenPanelWithFocus}
             />
           ))
         )}
@@ -1171,7 +1322,7 @@ export function GitHubPluginDiscovery() {
               variant="ghost"
               size="sm"
               onClick={() => handlePageChange(Math.max(1, page - 1))}
-              disabled={page <= 1 || loading || networkDisabled || viewingCache}
+              disabled={page <= 1 || loading || refreshDisabled || viewingCache}
             >
               上一页
             </Button>
@@ -1182,7 +1333,7 @@ export function GitHubPluginDiscovery() {
               variant="ghost"
               size="sm"
               onClick={() => handlePageChange(page + 1)}
-              disabled={page * 20 >= totalCount || loading || networkDisabled || viewingCache}
+              disabled={page * 20 >= totalCount || loading || refreshDisabled || viewingCache}
             >
               下一页
             </Button>

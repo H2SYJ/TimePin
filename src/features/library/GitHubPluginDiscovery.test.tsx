@@ -65,6 +65,12 @@ function okResult(plugins = [makePlugin()], rateLimit: GitHubRateInfo | null = n
   return { schemaVersion: '1.0.0', plugins, totalCount: plugins.length, rateLimit };
 }
 
+const rateLimitCodes = ['PRIMARY_RATE_LIMIT', 'SECONDARY_RATE_LIMIT', 'RATE_LIMIT_UNKNOWN', 'RATE_WAIT'] as const;
+
+/**
+ * PRIMARY_RATE_LIMIT/RATE_WAIT 且未明确归属资源桶 → 前端按"未知资源"保守为 global。
+ * 如需测试资源隔离，必须显式传 rateLimit.resource。
+ */
 function ghError(code: GitHubApiError['code'], over: Partial<GitHubApiError> = {}): GitHubApiError {
   return {
     schemaVersion: '1.0.0',
@@ -72,10 +78,28 @@ function ghError(code: GitHubApiError['code'], over: Partial<GitHubApiError> = {
     message: `error-${code}`,
     retryAt: null,
     action: code === 'AUTH_INVALID' ? 'REAUTHENTICATE'
-      : ['PRIMARY_RATE_LIMIT', 'SECONDARY_RATE_LIMIT', 'RATE_LIMIT_UNKNOWN', 'RATE_WAIT'].includes(code) ? 'WAIT' : 'NONE',
+      : rateLimitCodes.includes(code as (typeof rateLimitCodes)[number]) ? 'WAIT' : 'NONE',
     rateLimit: null,
     ...over,
   };
+}
+
+/** 搜索桶主限流（resource=search），retryAt 未来；供"search 阻塞仍可配置 token / 安装"用。 */
+function searchWaitError(over: Partial<GitHubApiError> = {}): GitHubApiError {
+  return ghError('PRIMARY_RATE_LIMIT', {
+    retryAt: Date.now() + 60000,
+    rateLimit: { limit: 10, remaining: 0, resetAt: Date.now() + 60000, resource: 'search' },
+    ...over,
+  });
+}
+
+/** Core 桶主限流（resource=core）；供"core 阻塞仍可 search"用。 */
+function coreWaitError(over: Partial<GitHubApiError> = {}): GitHubApiError {
+  return ghError('PRIMARY_RATE_LIMIT', {
+    retryAt: Date.now() + 60000,
+    rateLimit: { limit: 60, remaining: 0, resetAt: Date.now() + 60000, resource: 'core' },
+    ...over,
+  });
 }
 
 function deferred<T>() {
@@ -147,7 +171,7 @@ describe('GitHub 插件发现', () => {
       okResult([makePlugin()], { limit: 10, remaining: 5, resetAt, resource: 'search' }),
     );
     render(<GitHubPluginDiscovery />);
-    await screen.findByText(/API 剩余调用: 5/);
+    await screen.findByText('Search API 剩余: 5/10');
     expect(screen.getByText(/额度即将用尽/)).toBeInTheDocument();
     expect(screen.getByText(/重置于:/)).toBeInTheDocument();
   });
@@ -181,9 +205,7 @@ describe('GitHub 插件发现', () => {
   });
 
   it('搜索限流后配置成功：只重试一次原搜索，输入被清空', async () => {
-    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(
-      ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000, action: 'WAIT' }),
-    );
+    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(searchWaitError());
     render(<GitHubPluginDiscovery />);
     await loaded();
     const buttons = screen.getAllByRole('button', { name: /配置 Token/ });
@@ -220,7 +242,7 @@ describe('GitHub 插件发现', () => {
     await waitFor(() => expect(api.installGitHubPlugin).toHaveBeenCalledTimes(2));
   });
 
-  it('取消 token 面板不再重试，保留已有搜索结果', async () => {
+  it('取消 token 面板不再重试，401 后不保留旧凭据派生的搜索结果', async () => {
     vi.mocked(api.installGitHubPlugin).mockRejectedValue(
       ghError('AUTH_INVALID', { action: 'REAUTHENTICATE' }),
     );
@@ -234,7 +256,7 @@ describe('GitHub 插件发现', () => {
     expect(api.configureGitHubToken).not.toHaveBeenCalled();
     expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(1);
     expect(api.installGitHubPlugin).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('alpha-plugin')).toBeInTheDocument();
+    expect(screen.queryByText('alpha-plugin')).not.toBeInTheDocument();
   });
 
   it('次级限流只提示等待，不引导配置 token', async () => {
@@ -307,10 +329,8 @@ describe('GitHub 插件发现', () => {
     await screen.findByText('alpha-plugin');
     unmount();
 
-    // 再次挂载：本次搜索触发主限流
-    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(
-      ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 }),
-    );
+    // 再次挂载：本次搜索触发已知 search 桶主限流
+    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(searchWaitError());
     render(<GitHubPluginDiscovery />);
     const banner = await screen.findByRole('alert', { name: 'GitHub API 已达上限' });
     expect(within(banner).getByRole('button', { name: '配置 Token' })).toBeInTheDocument();
@@ -372,7 +392,11 @@ describe('GitHub 真实契约与并发回归', () => {
     const validation = deferred<GitHubSession>();
     vi.mocked(api.configureGitHubToken).mockReturnValue(validation.promise);
     vi.mocked(api.installGitHubPlugin).mockRejectedValueOnce(
-      ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000, action: 'WAIT' }),
+      ghError('PRIMARY_RATE_LIMIT', {
+        retryAt: Date.now() + 60000,
+        action: 'WAIT',
+        rateLimit: { limit: 60, remaining: 0, resetAt: Date.now() + 60000, resource: 'core' },
+      }),
     );
     render(<GitHubPluginDiscovery />);
     await confirmInstallation();
@@ -384,8 +408,10 @@ describe('GitHub 真实契约与并发回归', () => {
     expect(api.installGitHubPlugin).toHaveBeenCalledTimes(1);
     vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
     await act(async () => validation.resolve(authenticatedSession));
-    await screen.findByRole('button', { name: '已安装' });
+    await waitFor(() => expect(api.installGitHubPlugin).toHaveBeenCalledTimes(2));
     await settled();
+    // 新身份不能继续展示旧凭据派生的卡片；安装的本地副作用稍后可合并回新发现结果。
+    expect(screen.queryByText('alpha-plugin')).not.toBeInTheDocument();
     expect(api.installGitHubPlugin).toHaveBeenCalledTimes(2);
     expect(vi.mocked(api.installGitHubPlugin).mock.calls).toEqual([
       [{ owner: 'owner', repo: 'alpha-plugin', branch: 'main' }],
@@ -426,7 +452,10 @@ describe('GitHub 真实契约与并发回归', () => {
     vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
     vi.mocked(api.discoverGitHubPlugins).mockImplementationOnce(async () => {
       vi.mocked(api.getGitHubSession).mockResolvedValue(invalidSession);
-      throw ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 });
+      throw ghError('PRIMARY_RATE_LIMIT', {
+        retryAt: Date.now() + 60000,
+        rateLimit: { limit: 10, remaining: 0, resetAt: Date.now() + 60000, resource: 'search' },
+      });
     }).mockResolvedValueOnce(okResult());
     render(<GitHubPluginDiscovery />);
     await screen.findByRole('alert', { name: 'Token 已失效' });
@@ -454,7 +483,7 @@ describe('GitHub 真实契约与并发回归', () => {
     expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(2);
     await act(async () => {
       if (outcome === 'success') oldSearch.resolve(okResult([makePlugin('owner/old-result')]));
-      else oldSearch.reject(ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 }));
+      else oldSearch.reject(searchWaitError());
     });
     await settled();
     expect(screen.getByText('已认证')).toBeInTheDocument();
@@ -525,7 +554,7 @@ describe('GitHub 真实契约与并发回归', () => {
 
   it('第2页失败后查看第1页缓存只切换视图，不触发 effect 联网；配置后仍重试原第2页', async () => {
     vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce({ ...okResult(), totalCount: 40 })
-      .mockRejectedValueOnce(ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 }))
+      .mockRejectedValueOnce(searchWaitError())
       .mockResolvedValueOnce({ ...okResult([makePlugin('owner/page-two')]), totalCount: 40 });
     render(<GitHubPluginDiscovery />);
     await screen.findByText('alpha-plugin');
@@ -603,7 +632,7 @@ describe('GitHub 真实契约与并发回归', () => {
 
   it('等待到点只解禁入口，不自动重发；缓存模式仍禁止分页联网', async () => {
     vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce({ ...okResult(), totalCount: 40 })
-      .mockRejectedValueOnce(ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 }));
+      .mockRejectedValueOnce(searchWaitError());
     render(<GitHubPluginDiscovery />);
     await screen.findByText('alpha-plugin');
     vi.useFakeTimers();
@@ -681,7 +710,7 @@ describe('GitHub 真实契约与并发回归', () => {
   });
 
   it('主限流横幅即使未点击确认就卸载，本应用会话也不重复弹出', async () => {
-    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(ghError('PRIMARY_RATE_LIMIT', { retryAt: Date.now() + 60000 }));
+    vi.mocked(api.discoverGitHubPlugins).mockRejectedValue(searchWaitError());
     const first = render(<GitHubPluginDiscovery />);
     await screen.findByRole('alert', { name: 'GitHub API 已达上限' });
     first.unmount();
@@ -698,5 +727,231 @@ describe('GitHub 真实契约与并发回归', () => {
     expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(1);
     await act(async () => search.resolve(okResult()));
     expect(screen.getByText('alpha-plugin')).toBeInTheDocument();
+  });
+});
+
+describe('GitHub 资源配额与身份隔离', () => {
+  it('同时展示 search/core 快照，最后一次 manifest 的 core 头不覆盖 search', async () => {
+    const search: GitHubRateInfo = { limit: 10, remaining: 2, resetAt: null, resource: 'search' };
+    const core: GitHubRateInfo = { limit: 60, remaining: 45, resetAt: null, resource: 'core' };
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValue({
+      ...okResult(), rateLimit: core, rateLimits: [search, core],
+    });
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    expect(screen.getByText('Search API 剩余: 2/10')).toBeInTheDocument();
+    expect(screen.getByText('Core API 剩余: 45/60')).toBeInTheDocument();
+  });
+
+  it('旧后端单快照仍按 resource 合并，而不是以最后一次 core 替换 search', async () => {
+    const search: GitHubRateInfo = { limit: 10, remaining: 2, resetAt: null, resource: 'search' };
+    const core: GitHubRateInfo = { limit: 60, remaining: 44, resetAt: null, resource: 'core' };
+    vi.mocked(api.getGitHubSession).mockResolvedValue({ ...anonymousSession, rateLimit: search });
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValue(okResult([makePlugin()], core));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    expect(screen.getByText('Search API 剩余: 2/10')).toBeInTheDocument();
+    expect(screen.getByText('Core API 剩余: 44/60')).toBeInTheDocument();
+  });
+
+  it.each(['PRIMARY_RATE_LIMIT', 'RATE_WAIT'] as const)('search %s 仅禁止刷新/翻页，仍可安装和验证候选', async (code) => {
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce({ ...okResult(), totalCount: 40 })
+      .mockRejectedValueOnce(searchWaitError({ code }));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await settled();
+    expect(screen.getByRole('button', { name: /请求受限/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '安装' })).toBeEnabled();
+    await confirmInstallation();
+    expect(api.installGitHubPlugin).toHaveBeenCalledTimes(1);
+    openTokenPanel();
+    submitToken('search-limit-candidate');
+    await settled();
+    expect(api.configureGitHubToken).toHaveBeenCalledWith('search-limit-candidate', false);
+    expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['PRIMARY_RATE_LIMIT', 'RATE_WAIT'] as const)('core %s 禁止安装，但允许刷新和翻页', async (code) => {
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValue({ ...okResult(), totalCount: 40 });
+    vi.mocked(api.installGitHubPlugin).mockRejectedValueOnce(coreWaitError({ code }));
+    render(<GitHubPluginDiscovery />);
+    await confirmInstallation();
+    expect(screen.getByRole('button', { name: '安装' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await settled();
+    expect(api.discoverGitHubPlugins).toHaveBeenLastCalledWith(2, 20);
+    expect(screen.getByRole('button', { name: '安装' })).toBeDisabled();
+  });
+
+  it.each(['PRIMARY_RATE_LIMIT', 'RATE_WAIT'] as const)('旧 %s 无资源归属时保守全局禁止含候选的所有入口', async (code) => {
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce({ ...okResult(), totalCount: 40 })
+      .mockRejectedValueOnce(ghError(code, { retryAt: Date.now() + 60000 }));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await settled();
+    expect(screen.getByRole('button', { name: /请求受限/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '安装' })).toBeDisabled();
+    openTokenPanel();
+    submitToken();
+    expect(screen.getByRole('button', { name: '验证并保存' })).toBeDisabled();
+    expect(api.configureGitHubToken).not.toHaveBeenCalled();
+  });
+
+  it('并发候选成功不能清除随后发生的全局 secondary 停止', async () => {
+    const install = deferred<string>();
+    const candidate = deferred<GitHubSession>();
+    vi.mocked(api.installGitHubPlugin).mockReturnValueOnce(install.promise);
+    vi.mocked(api.configureGitHubToken).mockReturnValueOnce(candidate.promise);
+    render(<GitHubPluginDiscovery />);
+    await confirmInstallation();
+    openTokenPanel();
+    submitToken();
+    await act(async () => install.reject(ghError('SECONDARY_RATE_LIMIT', {
+      rateLimit: { limit: 60, remaining: 30, resetAt: null, resource: 'core' },
+    })));
+    vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
+    await act(async () => candidate.resolve(authenticatedSession));
+    expect(screen.getByText('已认证')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '刷新' })).toBeDisabled();
+    expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: '清除 Token' }));
+    await settled();
+    openTokenPanel();
+    submitToken('not-a-bypass');
+    expect(screen.getByRole('button', { name: '验证并保存' })).toBeDisabled();
+    expect(api.configureGitHubToken).toHaveBeenCalledTimes(1);
+    expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it('清除 Token 后删除旧卡片/配额/缓存，已完成安装的本地路径仍可合并', async () => {
+    const oldRate: GitHubRateInfo = { limit: 5000, remaining: 4987, resetAt: null, resource: 'core' };
+    vi.mocked(api.getGitHubSession).mockResolvedValue({ ...authenticatedSession, rateLimit: oldRate });
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce(okResult([makePlugin('owner/private-only')], oldRate))
+      .mockRejectedValueOnce(searchWaitError())
+      .mockResolvedValueOnce(okResult([makePlugin('owner/private-only')]));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    await confirmInstallation();
+    fireEvent.click(screen.getByRole('button', { name: '清除 Token' }));
+    await settled();
+    expect(screen.queryByText('private-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Core API 剩余: 4987/5000')).not.toBeInTheDocument();
+    const cache = await screen.findByRole('button', { name: '查看缓存' });
+    expect(cache).toBeDisabled();
+    openTokenPanel();
+    submitToken();
+    await settled();
+    expect(screen.getByText('private-only')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '已安装' })).toBeDisabled();
+  });
+
+  it('重新挂载先验证身份，匿名身份不能读取已认证的远端缓存或配额', async () => {
+    const oldRate: GitHubRateInfo = { limit: 5000, remaining: 4321, resetAt: null, resource: 'core' };
+    vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce(okResult([makePlugin('owner/private-only')], oldRate));
+    const first = render(<GitHubPluginDiscovery />);
+    await loaded();
+    first.unmount();
+    const identity = deferred<GitHubSession>();
+    vi.mocked(api.getGitHubSession).mockReturnValueOnce(identity.promise).mockResolvedValue(anonymousSession);
+    vi.mocked(api.discoverGitHubPlugins).mockRejectedValueOnce(searchWaitError());
+    render(<GitHubPluginDiscovery />);
+    expect(screen.queryByText('private-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Core API 剩余: 4321/5000')).not.toBeInTheDocument();
+    await act(async () => identity.resolve(anonymousSession));
+    expect(await screen.findByRole('button', { name: '查看缓存' })).toBeDisabled();
+    expect(screen.queryByText('private-only')).not.toBeInTheDocument();
+  });
+
+  it('同为 AUTHENTICATED 的凭据替换也不能继续展示旧身份快照', async () => {
+    vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValueOnce(okResult([makePlugin('owner/private-only')], {
+      limit: 5000, remaining: 4321, resetAt: null, resource: 'core',
+    })).mockRejectedValueOnce(ghError('NOT_FOUND_OR_PRIVATE'))
+      .mockRejectedValueOnce(ghError('NETWORK_ERROR'));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    // 明确的搜索 404 入口也允许已认证用户配置另一个 Token。
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await settled();
+    openTokenPanel();
+    submitToken();
+    await settled();
+    expect(screen.queryByText('private-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Core API 剩余: 4321/5000')).not.toBeInTheDocument();
+  });
+
+  it('Token 校验成功前卸载也必须作废旧身份模块缓存', async () => {
+    const candidate = deferred<GitHubSession>();
+    vi.mocked(api.getGitHubSession).mockResolvedValue(authenticatedSession);
+    vi.mocked(api.configureGitHubToken).mockReturnValue(candidate.promise);
+    vi.mocked(api.discoverGitHubPlugins)
+      .mockResolvedValueOnce(okResult([makePlugin('owner/private-only')], {
+        limit: 5000, remaining: 4321, resetAt: null, resource: 'core',
+      }))
+      .mockRejectedValueOnce(ghError('NOT_FOUND_OR_PRIVATE'))
+      .mockRejectedValueOnce(searchWaitError());
+    const first = render(<GitHubPluginDiscovery />);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await settled();
+    openTokenPanel();
+    submitToken();
+    first.unmount();
+    await act(async () => candidate.resolve(authenticatedSession));
+    render(<GitHubPluginDiscovery />);
+    await screen.findByRole('alert', { name: '搜索失败' });
+    await settled();
+    expect(screen.queryByText('private-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Core API 剩余: 4321/5000')).not.toBeInTheDocument();
+    expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('缺失清单的私有仓库提示', () => {
+  it.each([
+    ['community-owner', 'unverified', false, true],
+    ['H2SYJ', 'unverified', false, false],
+    ['h2SyJ', 'unverified', false, false],
+    ['h2syj', 'unverified', false, false],
+    ['community-owner', 'verified', false, false],
+    ['community-owner', 'unverified', true, false],
+  ] as const)('%s / %s / manifest=%s 的提示显示=%s', async (owner, verification, hasManifest, expected) => {
+    const plugin: DiscoveredPlugin = { ...makePlugin(`${owner}/alpha-plugin`), verification };
+    if (!hasManifest) plugin.manifest = null;
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValue(okResult([plugin]));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    if (expected) {
+      expect(screen.getByText(/可能为私有仓库/)).toHaveTextContent('可能为私有仓库，配置 Token 后可尝试访问');
+    } else {
+      expect(screen.queryByText(/可能为私有仓库/)).not.toBeInTheDocument();
+    }
+    expect(screen.getAllByRole('button', { name: '配置 Token' })).toHaveLength(expected ? 2 : 1);
+  });
+
+  it('卡片入口定位到现有 Token 面板并聚焦，输入和打开均不自动联网', async () => {
+    const plugin: DiscoveredPlugin = { ...makePlugin(), verification: 'unverified', manifest: null };
+    vi.mocked(api.discoverGitHubPlugins).mockResolvedValue(okResult([plugin]));
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    const hint = screen.getByText(/可能为私有仓库/);
+    fireEvent.click(within(hint).getByRole('button', { name: '配置 Token' }));
+    const input = screen.getByLabelText(/Personal Access Token/);
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: 'candidate-not-saved' } });
+    const trigger = within(hint).getByRole('button', { name: '配置 Token' });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('candidate-not-saved');
+    expect(api.configureGitHubToken).not.toHaveBeenCalled();
+    expect(api.discoverGitHubPlugins).toHaveBeenCalledTimes(1);
   });
 });

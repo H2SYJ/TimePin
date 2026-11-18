@@ -515,6 +515,8 @@ export interface GitHubSession {
   /** 凭据库写入失败等警告；非 null 时 token 仅保存在内存 */
   storageWarning: string | null;
   rateLimit: GitHubRateInfo | null;
+  /** 各资源桶的独立快照；旧后端可省略，回退到 rateLimit。 */
+  rateLimits?: GitHubRateInfo[];
 }
 
 export interface DiscoverPluginsResult {
@@ -522,6 +524,7 @@ export interface DiscoverPluginsResult {
   plugins: DiscoveredPlugin[];
   totalCount: number;
   rateLimit: GitHubRateInfo | null;
+  rateLimits?: GitHubRateInfo[];
 }
 
 export interface InstallPluginParams {
