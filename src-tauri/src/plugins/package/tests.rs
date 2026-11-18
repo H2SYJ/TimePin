@@ -43,10 +43,10 @@ fn request(bytes: &[u8]) -> ImportPluginRequest {
 
 fn import_with_reload(
     request: ImportPluginRequest,
-    dirs: &[PathBuf],
+    root: &Path,
     reload: impl FnOnce(),
 ) -> Result<ImportPluginResult, String> {
-    super::import_package(request, dirs, |install| {
+    super::import_package(request, root, |install| {
         let result = install.activate()?;
         reload();
         Ok(result)
@@ -54,7 +54,7 @@ fn import_with_reload(
 }
 
 fn import(bytes: &[u8], root: &Path) -> Result<ImportPluginResult, String> {
-    import_with_reload(request(bytes), &[root.to_path_buf()], || {})
+    import_with_reload(request(bytes), root, || {})
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn imports_path_and_base64_with_camel_case_contract_and_default_version() {
             serde_json::from_value(serde_json::json!({"source": file.to_str().unwrap()})).unwrap();
         assert_eq!(request.schema_version, "1.0");
         let calls = AtomicUsize::new(0);
-        let result = import_with_reload(request, &[root.path().to_path_buf()], || {
+        let result = import_with_reload(request, root.path(), || {
             calls.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap();
@@ -97,13 +97,9 @@ fn imports_path_and_base64_with_camel_case_contract_and_default_version() {
         }))
         .unwrap();
         assert_eq!(
-            super::import_package(
-                encoded,
-                &[bytes_root.path().to_path_buf()],
-                PreparedInstall::activate,
-            )
-            .unwrap()
-            .version,
+            super::import_package(encoded, bytes_root.path(), PreparedInstall::activate,)
+                .unwrap()
+                .version,
             "2"
         );
     }
@@ -151,22 +147,15 @@ fn supports_both_manifests_flat_and_single_wrapper_and_priority() {
 }
 
 #[test]
-fn overwrite_replaces_whole_tree_retains_backup_and_only_writes_first_root() {
+fn overwrite_replaces_whole_tree_retains_backup_in_the_single_root() {
     let root = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
     import(&package("1"), root.path()).unwrap();
     fs::write(root.path().join("demo/old-only.py"), b"keep in backup").unwrap();
-    let result = import_with_reload(
-        request(&package("2")),
-        &[root.path().to_path_buf(), second.path().to_path_buf()],
-        || {},
-    )
-    .unwrap();
+    let result = import_with_reload(request(&package("2")), root.path(), || {}).unwrap();
     assert!(result.replaced);
     assert_eq!(result.version, "2");
     assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"2");
     assert!(!root.path().join("demo/old-only.py").exists());
-    assert_eq!(fs::read_dir(second.path()).unwrap().count(), 0);
     let transaction = fs::read_dir(root.path().join(".timepin-installs"))
         .unwrap()
         .next()
@@ -189,16 +178,41 @@ fn overwrite_replaces_whole_tree_retains_backup_and_only_writes_first_root() {
 }
 
 #[test]
+fn local_import_cannot_replace_the_bundled_recognition_service() {
+    for name in ["recognition", "ReCoGnItIoN"] {
+        let root = tempfile::tempdir().unwrap();
+        let service = root.path().join("recognition");
+        fs::create_dir(&service).unwrap();
+        fs::write(service.join("main.py"), b"bundled service").unwrap();
+        let bytes = zip(&[
+            ("plugin.json", &manifest(name, "1")),
+            ("main.py", b"replacement"),
+        ]);
+        let callbacks = AtomicUsize::new(0);
+        let result = super::import_package(request(&bytes), root.path(), |install| {
+            callbacks.fetch_add(1, Ordering::SeqCst);
+            install.activate()
+        });
+        assert!(result.unwrap_err().contains("内置识别服务保留目录"));
+        assert_eq!(callbacks.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(service.join("main.py")).unwrap(),
+            b"bundled service"
+        );
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+}
+
+#[test]
 fn same_root_manifest_alias_is_rejected_but_target_overwrite_is_allowed() {
     let root = tempfile::tempdir().unwrap();
     let package_bytes = package("2");
-    let dirs = || [root.path().to_path_buf()];
     let alias = root.path().join("alias");
     import(&package("1"), root.path()).unwrap();
     fs::rename(root.path().join("demo"), &alias).unwrap();
     // A different direct child already owns manifest.name: do not install.
-    let error = super::import_package(request(&package_bytes), &dirs(), |_| {
-        panic!("same-root alias must not stop processes")
+    let error = super::import_package(request(&package_bytes), root.path(), |_| {
+        panic!("alias reached lifecycle callback")
     })
     .unwrap_err();
     assert!(error.contains("同名插件"));
@@ -208,87 +222,14 @@ fn same_root_manifest_alias_is_rejected_but_target_overwrite_is_allowed() {
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     // Normal overwrite of the install target itself remains supported.
     fs::rename(&alias, root.path().join("demo")).unwrap();
-    let result =
-        super::import_package(request(&package_bytes), &dirs(), PreparedInstall::activate).unwrap();
-    assert!(result.replaced);
-    assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"2");
-}
-
-#[test]
-fn later_root_conflict_is_rejected_before_lifecycle_callback_or_mutation() {
-    let first = tempfile::tempdir().unwrap();
-    let later = tempfile::tempdir().unwrap();
-    import(&package("1"), later.path()).unwrap();
-    let dirs = [first.path().to_path_buf(), later.path().to_path_buf()];
-    let error = super::import_package(request(&package("2")), &dirs, |_| {
-        panic!("shadowed import must not stop processes")
-    })
-    .unwrap_err();
-    assert!(error.contains("同名插件"));
-    assert!(error.contains("调整目录顺序"));
-    assert!(error.contains(&later.path().display().to_string()));
-    assert_eq!(fs::read_dir(first.path()).unwrap().count(), 0);
-    assert_eq!(fs::read(later.path().join("demo/main.py")).unwrap(), b"1");
-    assert_eq!(fs::read_dir(later.path()).unwrap().count(), 1);
-
-    // Discovery identifies plugins by manifest.name, even with a different folder.
-    fs::rename(later.path().join("demo"), later.path().join("other-folder")).unwrap();
-    assert!(super::import_package(request(&package("2")), &dirs, |_| {
-        panic!("manifest-name conflict must not stop processes")
-    })
-    .is_err());
-    assert_eq!(fs::read_dir(first.path()).unwrap().count(), 0);
-
-    // An ordinary overwrite remains supported when the later root is empty.
-    fs::remove_dir_all(later.path().join("other-folder")).unwrap();
-    import(&package("1"), first.path()).unwrap();
-    assert!(
-        super::import_package(request(&package("2")), &dirs, PreparedInstall::activate)
-            .unwrap()
-            .replaced
-    );
-    assert_eq!(fs::read(first.path().join("demo/main.py")).unwrap(), b"2");
-}
-
-#[test]
-fn canonical_alias_of_the_same_root_does_not_conflict() {
-    let root = tempfile::tempdir().unwrap();
-    import(&package("1"), root.path()).unwrap();
     let result = super::import_package(
-        request(&package("2")),
-        &[root.path().to_path_buf(), root.path().join(".")],
+        request(&package_bytes),
+        root.path(),
         PreparedInstall::activate,
     )
     .unwrap();
     assert!(result.replaced);
     assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"2");
-
-    let later = tempfile::tempdir().unwrap();
-    import(&package("shadow"), later.path()).unwrap();
-    // Exact repeated roots are de-duplicated by discovery, so B still wins.
-    assert!(super::import_package(
-        request(&package("3")),
-        &[
-            root.path().to_path_buf(),
-            later.path().to_path_buf(),
-            root.path().to_path_buf()
-        ],
-        |_| panic!("repeated root must not hide the conflict"),
-    )
-    .is_err());
-    // A distinct path to the same directory is scanned last and resolves to A.
-    fs::create_dir(root.path().join("alias-component")).unwrap();
-    let alias = root.path().join("alias-component/..");
-    assert!(
-        super::import_package(
-            request(&package("3")),
-            &[root.path().to_path_buf(), later.path().to_path_buf(), alias],
-            PreparedInstall::activate,
-        )
-        .unwrap()
-        .replaced
-    );
-    assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"3");
 }
 
 #[test]
@@ -296,32 +237,26 @@ fn validates_and_extracts_before_stop_then_switches_before_reload() {
     let root = tempfile::tempdir().unwrap();
     import(&package("old"), root.path()).unwrap();
     for bytes in [b"not zip".to_vec(), zip(&[("plugin.json", b"bad")])] {
-        assert!(
-            super::import_package(request(&bytes), &[root.path().to_path_buf()], |_| {
-                panic!("invalid packages must not stop processes")
-            })
-            .is_err()
-        );
+        assert!(super::import_package(request(&bytes), root.path(), |_| {
+            Err::<ImportPluginResult, _>("invalid package reached lifecycle callback".to_owned())
+        })
+        .is_err());
     }
     let mut events = Vec::new();
-    super::import_package(
-        request(&package("new")),
-        &[root.path().to_path_buf()],
-        |install| {
-            assert_eq!(fs::read(install.root.join("main.py")).unwrap(), b"new");
-            assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"old");
-            assert!(
-                INSTALL_LOCK.try_lock().is_err(),
-                "install lock includes stop/reload"
-            );
-            events.push("stop");
-            let result = install.activate()?;
-            events.push("switch");
-            assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"new");
-            events.push("reload");
-            Ok(result)
-        },
-    )
+    super::import_package(request(&package("new")), root.path(), |install| {
+        assert_eq!(fs::read(install.root.join("main.py")).unwrap(), b"new");
+        assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"old");
+        assert!(
+            INSTALL_LOCK.try_lock().is_err(),
+            "install lock includes stop/reload"
+        );
+        events.push("stop");
+        let result = install.activate()?;
+        events.push("switch");
+        assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"new");
+        events.push("reload");
+        Ok(result)
+    })
     .unwrap();
     assert_eq!(events, ["stop", "switch", "reload"]);
 }
@@ -330,31 +265,68 @@ fn validates_and_extracts_before_stop_then_switches_before_reload() {
 fn dropping_a_validated_stage_preserves_install_without_backup() {
     let root = tempfile::tempdir().unwrap();
     import(&package("old"), root.path()).unwrap();
-    assert!(super::import_package(
-        request(&package("new")),
-        &[root.path().to_path_buf()],
-        |_| { Err("lifecycle transition rejected".to_owned()) }
-    )
-    .is_err());
+    assert!(
+        super::import_package(request(&package("new")), root.path(), |_| {
+            Err("lifecycle transition rejected".to_owned())
+        })
+        .is_err()
+    );
     assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"old");
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
 #[test]
-fn no_saved_root_or_invalid_first_root_never_falls_back() {
-    let root = tempfile::tempdir().unwrap();
-    let error =
-        import_with_reload(request(&package("1")), &[], || panic!("must not reload")).unwrap_err();
-    assert!(error.contains("设置"));
-    for bad in [PathBuf::from("relative"), root.path().join("missing")] {
-        assert!(import_with_reload(
-            request(&package("1")),
-            &[bad, root.path().to_path_buf()],
-            || panic!("must not reload")
-        )
-        .is_err());
+fn imports_create_the_single_root_and_block_invalid_roots_without_fallback() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("plugins");
+    assert!(!root.exists());
+    import(&package("1"), &root).unwrap();
+    assert_eq!(fs::read(root.join("demo/main.py")).unwrap(), b"1");
+    let blocked = directory.path().join("blocked");
+    fs::write(&blocked, b"preserve").unwrap();
+    for bad in [
+        PathBuf::from("relative"),
+        PathBuf::new(),
+        blocked.clone(),
+        blocked.join("plugins"),
+    ] {
+        assert!(
+            import_with_reload(request(&package("2")), &bad, || panic!("must not reload")).is_err()
+        );
     }
-    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    assert_eq!(fs::read(blocked).unwrap(), b"preserve");
+    assert_eq!(fs::read(root.join("demo/main.py")).unwrap(), b"1");
+}
+
+#[test]
+fn case_variant_targets_are_reused_or_rejected_according_to_filesystem_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("demo");
+    let second = root.path().join("DEMO");
+    fs::create_dir(&first).unwrap();
+    fs::write(first.join("plugin.json"), manifest("other", "1")).unwrap();
+    match fs::create_dir(&second) {
+        Ok(()) => {
+            // Case-sensitive filesystems can hold two colliding target names.
+            let error = import_with_reload(request(&package("2")), root.path(), || {
+                panic!("conflicting targets must not reload")
+            })
+            .unwrap_err();
+            assert!(error.contains("大小写冲突"));
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Windows/default macOS: both casings are the same install target,
+            // not two competing manifest aliases. Existing targets may update.
+            assert_eq!(install_target(root.path(), "DEMO").unwrap(), first);
+            let result = import(&package("2"), root.path()).unwrap();
+            assert!(result.replaced);
+            assert_eq!(fs::read(first.join("main.py")).unwrap(), b"2");
+            assert_eq!(fs::read(second.join("main.py")).unwrap(), b"2");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        }
+        Err(error) => panic!("cannot create case-variant test directory: {error}"),
+    }
 }
 
 #[test]
@@ -363,11 +335,9 @@ fn invalid_schema_source_or_extension_does_not_create_installs() {
     let mut unsupported = request(&package("1"));
     unsupported.schema_version = "1.0.0".to_owned();
     assert!(
-        import_with_reload(unsupported, &[root.path().to_path_buf()], || panic!(
-            "must not reload"
-        ))
-        .unwrap_err()
-        .contains("schemaVersion")
+        import_with_reload(unsupported, root.path(), || panic!("must not reload"))
+            .unwrap_err()
+            .contains("schemaVersion")
     );
     for (name, base64) in [
         ("plugin.txt", ""),
@@ -382,12 +352,7 @@ fn invalid_schema_source_or_extension_does_not_create_installs() {
             }),
             schema_version: "1.0".into(),
         };
-        assert!(
-            import_with_reload(request, &[root.path().to_path_buf()], || panic!(
-                "must not reload"
-            ))
-            .is_err()
-        );
+        assert!(import_with_reload(request, root.path(), || panic!("must not reload")).is_err());
     }
     assert!(read_source(ImportPluginSource::Path(
         root.path()
@@ -449,10 +414,7 @@ fn unsafe_or_broken_packages_preserve_old_install_and_do_not_reload() {
     }
     for bytes in bad {
         assert!(
-            import_with_reload(request(&bytes), &[root.path().to_path_buf()], || panic!(
-                "must not reload"
-            ))
-            .is_err()
+            import_with_reload(request(&bytes), root.path(), || panic!("must not reload")).is_err()
         );
         assert_eq!(fs::read(root.path().join("demo/main.py")).unwrap(), b"old");
         assert_eq!(
@@ -634,7 +596,7 @@ fn same_process_imports_are_serialized_through_reload() {
     std::thread::scope(|scope| {
         for _ in 0..4 {
             scope.spawn(|| {
-                import_with_reload(request(&package("1")), &[root.path().to_path_buf()], || {
+                import_with_reload(request(&package("1")), root.path(), || {
                     assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
                     std::thread::yield_now();
                     assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);

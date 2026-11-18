@@ -29,14 +29,10 @@ pub fn run() {
             };
             app.manage(github);
 
-            // Discover bundled, app-owned and saved custom roots without starting processes.
-            let custom_dirs = crate::core::settings::load_settings(app.handle())
-                .map(|settings| settings.custom_plugin_dirs)
-                .unwrap_or_default();
-            let plugin_dirs =
-                crate::plugins::manager::PluginManager::plugin_dirs(app.handle(), &custom_dirs);
+            // Startup initialization already created the executable-adjacent root.
+            let plugin_dir = crate::core::get_plugin_dir(app.handle());
             let manager =
-                crate::plugins::manager::PluginManager::discover(app.handle(), &plugin_dirs);
+                crate::plugins::manager::PluginManager::discover(app.handle(), &plugin_dir);
             app.manage(manager);
 
             // 识别服务状态

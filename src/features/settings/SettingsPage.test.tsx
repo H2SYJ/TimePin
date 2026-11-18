@@ -33,7 +33,7 @@ async function ready() {
 beforeEach(() => {
   handlers = [];
   unlisten = vi.fn();
-  useAppStore.setState({ settings: { ...defaults, customPluginDirs: [] }, error: null, notice: null });
+  useAppStore.setState({ settings: { ...defaults }, error: null, notice: null });
   vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
     matches: false, media: query, onchange: null,
     addListener: () => {}, removeListener: () => {},
@@ -45,6 +45,7 @@ beforeEach(() => {
   vi.spyOn(api, 'pickDirectory').mockResolvedValue(null);
   vi.spyOn(api, 'pickExecutable').mockResolvedValue(null);
   vi.spyOn(api, 'openPluginDirectory').mockResolvedValue(undefined);
+  vi.spyOn(api, 'reloadPlugins').mockResolvedValue([]);
   vi.spyOn(api, 'installDependencies').mockResolvedValue(installed);
   vi.spyOn(api, 'onDependencyInstallProgress').mockImplementation(async (handler) => { handlers.push(handler); return unlisten; });
   vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
@@ -60,25 +61,23 @@ describe('advanced settings workspace', () => {
     expect(within(advanced).getByRole('textbox', { name: /^FFmpeg 路径/ })).toBeInTheDocument();
     expect(within(advanced).getByRole('textbox', { name: /^FFprobe 路径/ })).toBeInTheDocument();
     expect(screen.getAllByRole('textbox', { name: /^FFmpeg 路径/ })).toHaveLength(1);
-    expect(screen.getByText(/更改目录不会移动或删除旧插件/)).toBeInTheDocument();
+    expect(screen.getByText(/TimePin 只扫描可执行文件同级 plugins 目录/)).toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: '依赖状态' })).getAllByText(/要求 ≥ 6.0/)).toHaveLength(2);
   });
 
-  it('blocks invalid directory and numeric saves, then allows correction', async () => {
+  it('blocks invalid numeric saves, then allows correction', async () => {
     render(<SettingsPage />);
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: '手动添加目录' }));
-    fireEvent.change(screen.getByRole('textbox', { name: /^插件搜索目录 1/ }), { target: { value: 'relative/plugins' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: '缩略图质量' }), { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
     expect(api.saveSettings).not.toHaveBeenCalled();
-    expect(screen.getByText(/请先修正以下 2 处/)).toBeInTheDocument();
+    expect(screen.getByText(/请先修正以下 1 处/)).toBeInTheDocument();
     expect(screen.getAllByText(/缩略图质量必须是/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('textbox', { name: /^插件搜索目录 1/ })).toHaveAttribute('aria-invalid', 'true');
-    fireEvent.change(screen.getByRole('textbox', { name: /^插件搜索目录 1/ }), { target: { value: 'D:/plugins' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: '缩略图质量' }), { target: { value: '90' } });
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ thumbnailQuality: 90, customPluginDirs: ['D:/plugins'] })));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ thumbnailQuality: 90 })));
+    expect(vi.mocked(api.saveSettings).mock.calls[0]![0]).not.toHaveProperty('customPluginDirs');
+    expect(api.reloadPlugins).not.toHaveBeenCalled();
   });
 
   it('shows save failure without changing saved state; save and install are disabled during persistence', async () => {
@@ -111,12 +110,9 @@ describe('advanced settings workspace', () => {
     expect(screen.queryByText(/当前 5.1/)).not.toBeInTheDocument();
   });
 
-  it('keeps draft untouched when either picker is cancelled', async () => {
+  it('keeps draft untouched when picker is cancelled', async () => {
     render(<SettingsPage />);
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: '浏览并添加目录' }));
-    await waitFor(() => expect(api.pickDirectory).toHaveBeenCalledOnce());
-    expect(screen.queryByRole('textbox', { name: /^插件搜索目录 1/ })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: '浏览 FFmpeg' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '浏览 FFmpeg' }));
     await waitFor(() => expect(api.pickExecutable).toHaveBeenCalledWith('ffmpeg'));
@@ -124,20 +120,15 @@ describe('advanced settings workspace', () => {
     expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled();
   });
 
-  it('supports multiple plugin roots and only opens saved indices or app default', async () => {
-    useAppStore.setState({ settings: { ...defaults, customPluginDirs: ['D:/plugins', 'E:/plugins'] } });
+  it('shows the unified executable plugins directory and opens it without index', async () => {
     render(<SettingsPage />);
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: '打开插件目录 2' }));
-    expect(api.openPluginDirectory).toHaveBeenCalledWith(1);
-    fireEvent.click(screen.getByRole('button', { name: '打开默认目录' }));
-    expect(api.openPluginDirectory).toHaveBeenCalledWith(null);
-    fireEvent.change(screen.getByRole('textbox', { name: /^插件搜索目录 2/ }), { target: { value: 'F:/draft' } });
-    expect(screen.getByRole('button', { name: '打开插件目录 2' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: '恢复默认插件目录' }));
-    expect(screen.queryByRole('textbox', { name: /^插件搜索目录/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ customPluginDirs: [] })));
+    const advanced = screen.getByLabelText('高级设置');
+    expect(within(advanced).getByRole('textbox', { name: /^统一插件目录/ })).toHaveValue('C:/app/plugins');
+    fireEvent.click(within(advanced).getByRole('button', { name: '打开目录' }));
+    await waitFor(() => expect(api.openPluginDirectory).toHaveBeenCalledWith());
+    expect(screen.queryByRole('button', { name: '手动添加目录' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '恢复默认插件目录' })).not.toBeInTheDocument();
   });
 
   it('correlates progress, disables overlapping operations, and preserves unsaved draft on install success', async () => {

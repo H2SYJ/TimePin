@@ -30,7 +30,6 @@ export interface Settings {
   language: string;
   theme: Theme;
   hardwareAcceleration: boolean;
-  customPluginDirs: string[];
   /** 用户显式配置的 Python 解释器绝对路径（优先于内嵌运行时） */
   pythonPath: string | null;
   /** 是否允许回退到系统 PATH 中的 python/python3 */

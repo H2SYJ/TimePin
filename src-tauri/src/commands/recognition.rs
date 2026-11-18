@@ -7,7 +7,7 @@ use crate::plugins::recognition::{
 use crate::plugins::{manifest::PluginRuntime, python_env};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 /// 识别服务状态
 pub struct RecognitionState {
@@ -17,33 +17,9 @@ pub struct RecognitionState {
 
 impl RecognitionState {
     pub fn new(app: &AppHandle) -> Self {
-        // 识别服务目录（开发模式：仓库根 plugins/recognition；生产模式：resource_dir/plugins/recognition）
-        let mut service_dir = None;
-
-        // 开发模式
-        if let Ok(cwd) = std::env::current_dir() {
-            for ancestor in cwd.ancestors().take(4) {
-                let candidate = ancestor.join("plugins").join("recognition");
-                if candidate.is_dir() {
-                    service_dir = Some(candidate);
-                    break;
-                }
-            }
-        }
-
-        // 生产模式
-        if service_dir.is_none() {
-            if let Ok(resource) = app.path().resource_dir() {
-                let candidate = resource.join("plugins").join("recognition");
-                if candidate.is_dir() {
-                    service_dir = Some(candidate);
-                }
-            }
-        }
-
         Self {
             process: Arc::new(Mutex::new(None)),
-            service_dir: service_dir.unwrap_or_else(|| PathBuf::from("plugins/recognition")),
+            service_dir: crate::core::get_plugin_dir(app).join("recognition"),
         }
     }
 }

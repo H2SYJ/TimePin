@@ -1,8 +1,7 @@
-import { Copy, Download, FolderOpen, Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
+import { Copy, Download, FolderOpen, RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Card, Input, Progress, Switch } from '@/components/ui';
 import { api, isTauri } from '@/lib/ipc';
-import { useAppStore } from '@/stores/app';
 import type { AdvancedSettingsInfo, DependencyReport, EnvRebuildResult, Settings } from '@/types';
 import type { SettingsErrors } from './settingsValidation';
 import type { useDependencyInstaller } from './useDependencyInstaller';
@@ -20,7 +19,6 @@ interface Props {
 
 export function AdvancedSettings({ draft, patch, errors, saving, installer }: Props) {
   const desktop = isTauri();
-  const savedDirectories = useAppStore((state) => state.settings.customPluginDirs);
   const [info, setInfo] = useState<AdvancedSettingsInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
   const [report, setReport] = useState<DependencyReport | null>(null);
@@ -88,17 +86,6 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
     }
   };
 
-  const browseDirectory = async (index?: number) => {
-    setPicking(true);
-    await perform(async () => {
-      const path = await api.pickDirectory();
-      if (!path || !mounted.current) return;
-      if (index === undefined) patch('customPluginDirs', [...draft.customPluginDirs, path]);
-      else patch('customPluginDirs', draft.customPluginDirs.map((value, i) => i === index ? path : value));
-    });
-    if (mounted.current) setPicking(false);
-  };
-
   const browsePython = async () => {
     setPicking(true);
     await perform(async () => {
@@ -146,7 +133,7 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
     <Card className="rounded-2xl border-divider bg-default-50/50 p-6" aria-labelledby="advanced-settings-title">
       <div className="mb-5">
         <h2 id="advanced-settings-title" className="text-base font-semibold">高级设置</h2>
-        <p className="mt-1 text-sm text-default-500">管理插件搜索目录、媒体依赖和本机安装。保存后立即生效，无需重启。</p>
+        <p className="mt-1 text-sm text-default-500">查看统一插件目录、媒体依赖和本机安装。保存后立即生效，无需重启。</p>
       </div>
       {!desktop && <p role="status" className="mb-5 rounded-lg bg-default-100 p-3 text-sm text-default-600">当前为浏览器预览。目录选择、依赖检测、安装和保存设置仅在 TimePin 桌面应用中可用。</p>}
       {infoError && <p role="alert" className="mb-4 text-sm text-danger">无法读取应用目录：{infoError}</p>}
@@ -154,32 +141,10 @@ export function AdvancedSettings({ draft, patch, errors, saving, installer }: Pr
         <section aria-labelledby="plugin-directories-title" className="space-y-4">
           <h3 id="plugin-directories-title" className="text-sm font-semibold">插件目录</h3>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-            <Input label="默认用户插件目录（始终搜索）" value={info?.defaultPluginDirectory ?? ''} placeholder={desktop ? '正在读取应用目录…' : '请在桌面应用中查看'} isReadOnly />
-            <Button variant="secondary" className="sm:mt-6" isDisabled={!desktop || !info || busy} onPress={() => void perform(() => api.openPluginDirectory(null))}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开默认目录</Button>
+            <Input label="统一插件目录" value={info?.defaultPluginDirectory ?? ''} placeholder={desktop ? '正在读取应用目录…' : '请在桌面应用中查看'} isReadOnly />
+            <Button variant="secondary" className="sm:mt-6" isDisabled={!desktop || !info || busy} onPress={() => void perform(() => api.openPluginDirectory())}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开目录</Button>
           </div>
-          <p className="text-xs text-default-500">内置插件和默认用户目录始终参与搜索。以下每一项都是额外的插件搜索根目录，必须是已存在的绝对目录。</p>
-          {draft.customPluginDirs.length === 0 && <p className="text-sm text-default-500">未配置额外搜索目录，使用默认目录。</p>}
-          <div className="space-y-3">
-            {draft.customPluginDirs.map((directory, index) => {
-              const saved = directory === savedDirectories[index];
-              return (
-                <div key={index} className="flex flex-col gap-2 rounded-lg border border-divider p-3 sm:flex-row sm:items-start">
-                  <Input id={`plugin-${index}`} label={`插件搜索目录 ${index + 1}`} value={directory} placeholder="绝对目录路径" isDisabled={busy} isInvalid={Boolean(errors[`plugin-${index}`])} errorMessage={errors[`plugin-${index}`]} onValueChange={(value) => patch('customPluginDirs', draft.customPluginDirs.map((path, i) => i === index ? value : path))} />
-                  <div className="flex gap-2 sm:mt-6">
-                    <Button variant="secondary" isDisabled={!desktop || busy} aria-label={`浏览插件目录 ${index + 1}`} onPress={() => void browseDirectory(index)}>浏览</Button>
-                    <Button variant="secondary" isDisabled={!desktop || busy || !saved} aria-label={`打开插件目录 ${index + 1}`} title={saved ? '打开已保存的目录' : '请先保存该目录'} onPress={() => void perform(() => api.openPluginDirectory(index))}><FolderOpen className="h-4 w-4" aria-hidden="true" />打开</Button>
-                    <Button variant="danger" size="icon" isDisabled={busy} aria-label={`移除插件目录 ${index + 1}`} onPress={() => patch('customPluginDirs', draft.customPluginDirs.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" isDisabled={!desktop || busy} onPress={() => void browseDirectory()}><FolderOpen className="h-4 w-4" aria-hidden="true" />浏览并添加目录</Button>
-            <Button variant="ghost" isDisabled={busy} onPress={() => patch('customPluginDirs', [...draft.customPluginDirs, ''])}><Plus className="h-4 w-4" aria-hidden="true" />手动添加目录</Button>
-            <Button variant="ghost" isDisabled={busy || draft.customPluginDirs.length === 0} onPress={() => patch('customPluginDirs', [])}><RotateCcw className="h-4 w-4" aria-hidden="true" />恢复默认插件目录</Button>
-          </div>
-          <p className="rounded-lg bg-default-100 p-3 text-sm text-default-600">更改目录不会移动或删除旧插件。需要迁移时，请手动复制插件到目标目录，再保存设置；恢复默认仅清空额外目录列表。</p>
+          <p className="text-xs text-default-500">TimePin 只扫描可执行文件同级 plugins 目录，不再读取应用数据目录或历史自定义插件目录；升级用户可先复制旧插件到此目录，再点击「重新加载」。</p>
         </section>
 
         <section aria-labelledby="python-runtime-title" className="space-y-4 border-t border-divider pt-5">

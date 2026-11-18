@@ -49,7 +49,7 @@ beforeEach(() => {
   __resetGitHubDiscoverySessionState();
   useAppStore.setState({
     ...useAppStore.getInitialState(), page: 'plugins',
-    settings: { ...useAppStore.getInitialState().settings, customPluginDirs: ['C:/plugins', 'D:/other'] },
+    settings: { ...useAppStore.getInitialState().settings },
   });
   vi.spyOn(api, 'getPlugins').mockResolvedValue([plugin]);
   vi.spyOn(api, 'reloadPlugins').mockResolvedValue([plugin]);
@@ -88,8 +88,7 @@ describe('本地插件包导入', () => {
     expect(screen.getByRole('region', { name: '插件包拖放区域' })).toBeVisible();
     expect(screen.getByText(/支持 .tppkg \/ .zip，一次一个/)).toBeVisible();
     expect(screen.getByText(/仅导入信任的包.*覆盖同名插件.*停止所有正在运行的插件/)).toBeVisible();
-    expect(screen.getByText('导入到第一个已保存的自定义插件目录：C:/plugins')).toBeVisible();
-    expect(screen.queryByText(/D:\/other/)).not.toBeInTheDocument();
+    expect(screen.getByText(/插件统一导入到 TimePin 可执行文件同级的 plugins 文件夹/)).toBeVisible();
     fireEvent.keyDown(button, { key: 'Enter', code: 'Enter' });
     fireEvent.keyUp(button, { key: 'Enter', code: 'Enter' });
     await waitFor(() => expect(api.pickPluginPackage).toHaveBeenCalledTimes(1));
@@ -190,32 +189,6 @@ describe('本地插件包导入', () => {
     expect(run).not.toHaveBeenCalled();
     await act(async () => picking.resolve(null));
     expect(action()).toBeEnabled();
-  });
-
-  it.each([{ dirs: [] as string[] }, { dirs: ['', 'D:/other'] }])('没有有效的第一个已保存目录时引导设置且不选择/读取/导入', async ({ dirs }) => {
-    useAppStore.setState((state) => ({ settings: { ...state.settings, customPluginDirs: dirs } }));
-    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL');
-    await mountPage();
-    fireEvent.click(screen.getByRole('button', { name: '导入插件' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('添加并保存第一个自定义插件目录');
-    nativeDrop(['rule.zip']);
-    htmlDrop([new File(['zip'], 'rule.zip')]);
-    expect(api.pickPluginPackage).not.toHaveBeenCalled();
-    expect(api.importPlugin).not.toHaveBeenCalled();
-    expect(read).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: '前往设置' }));
-    expect(useAppStore.getState().page).toBe('settings');
-  });
-
-  it('设置保存失败的候选目录不作为有效导入配置', async () => {
-    useAppStore.setState((state) => ({ settings: { ...state.settings, customPluginDirs: [] } }));
-    vi.spyOn(api, 'saveSettings').mockRejectedValueOnce('无法保存');
-    await useAppStore.getState().updateSettings({ ...useAppStore.getState().settings, customPluginDirs: ['C:/draft'] });
-    await mountPage();
-    fireEvent.click(screen.getByRole('button', { name: '导入插件' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('前往设置');
-    expect(api.pickPluginPackage).not.toHaveBeenCalled();
-    expect(api.importPlugin).not.toHaveBeenCalled();
   });
 
   it('原生拖放使用路径（大小写不敏感），不触发 FileReader', async () => {

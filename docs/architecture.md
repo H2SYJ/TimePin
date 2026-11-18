@@ -106,7 +106,7 @@ MarksPage 勾选有效区间 → Tauri 选择输出目录 → invoke("export_seg
 
 ## 5. 插件生命周期
 
-本地插件包通过插件页按钮或拖放导入，经 `import_plugin` 在阻塞线程内读取、校验和安装到第一个已保存的自定义插件目录；没有目录时引导设置而非写入内置资源。校验成功后安全替换同名目录，调用 `PluginManager::reload` 并刷新列表。详见[本地插件包导入](plugin-import.md)。
+插件目录只有 `core::get_plugin_dir(app)` 返回的 `<exe_dir>/plugins`，由 `core::init` 自动创建。发现、重新加载、本地包导入、GitHub 商店安装和打开目录共用这一根目录，不再读取设置决定搜索路径，也不扫描应用数据、资源或开发仓库目录。本地包经 `import_plugin` 在阻塞线程内读取、校验后安全替换同名目录，调用 `PluginManager::reload` 并刷新列表。普通设置保存不再触发插件重载。旧版本用户需手动复制插件，详见[本地插件包导入与迁移](plugin-import.md)。
 
 ```
 discovered → validated → started → ready → running → stopped | crashed
@@ -124,8 +124,8 @@ discovered → validated → started → ready → running → stopped | crashed
 
 ## 6. 打包
 
-- `tauri.conf.json` `bundle.resources: ["../plugins"]` — 插件目录随包分发到 `resource_dir/plugins/`
-- `builtin_plugin_dirs()` 依次尝试：CWD 祖先 `plugins/`（开发）→ `resource_dir/plugins/`（生产）
+- `tauri.conf.json` 将仓库 `plugins/` 显式映射到包资源的 `plugins/`，Windows 安装后位于可执行文件同目录；不再依赖 `../` 的隐式资源路径映射
+- 唯一插件根为 `<exe_dir>/plugins`，启动自动创建；不扫描 CWD 祖先、仓库或其他资源路径。开发时需复制插件到实际可执行文件旁；旧用户及 macOS/Linux 部署限制见[插件迁移说明](plugin-import.md#旧版本迁移破坏性变更)
 - 运行时依赖：Python/Node 插件需要用户在 PATH 安装对应解释器；`binary` 类型插件直接执行（externalBin 待接入）
 - FFmpeg/FFprobe：`core/tools.rs` 的 `resolve_ffmpeg` 尝试 `settings.ffmpegPath` → `resource_dir/bin/` → PATH
 - **更新器**：`tauri.conf.json` `plugins.updater` 固定指向 `https://github.com/H2SYJ/TimePin/releases/latest/download/latest.json`；开发配置中 `pubkey` 留空表示未配置，构建覆盖文件注入仓库变量 `TAURI_UPDATER_PUBLIC_KEY`。Release 流水线仅在 `main` 分支构建四个显式目标平台，构建 job 只读产物，单个聚合 job 验签后生成完整 `latest.json` 与 `SHA256SUMS` 并创建草稿 Release（人工检查后发布）。

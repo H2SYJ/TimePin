@@ -3,7 +3,7 @@
 //! 生命周期（对应任务要求）：
 //! `discovered → validated → started → ready → running → stopped | crashed`
 //!
-//! - 发现：扫描内置 `plugins/` 目录 + 设置中的 `customPluginDirs`
+//! - 发现：只扫描可执行文件旁的 `plugins/` 目录
 //! - 校验：`PluginManifest::validate()`，不兼容直接标 `invalid`
 //! - 启动：`PluginProcess::spawn()`（独立 Sidecar 进程 + 协议握手）
 //! - 执行：`run_plugin()` 把执行丢到 tokio 任务中，UI 不阻塞；
@@ -11,12 +11,12 @@
 //! - 崩溃恢复：进程意外退出标记 `crashed`，下次 `run_plugin` 自动重启
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 
 use crate::formats::Mark;
@@ -160,18 +160,10 @@ fn install_transition<T, E>(
     result
 }
 
-impl PluginManager {
-    /// 扫描目录并构建管理器；不会启动任何进程（懒启动）。
-    pub fn discover(app: &AppHandle, plugin_dirs: &[PathBuf]) -> Self {
-        let mut plugins = HashMap::new();
-        for dir in plugin_dirs {
-            if !dir.is_dir() {
-                continue;
-            }
-            let entries = match std::fs::read_dir(dir) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+fn discover_plugins(root: &Path) -> HashMap<String, SharedPlugin> {
+    let mut plugins = HashMap::new();
+    if root.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(root) {
             for entry in entries.flatten() {
                 let plugin_dir = entry.path();
                 if !plugin_dir.is_dir() {
@@ -204,50 +196,21 @@ impl PluginManager {
                 }
             }
         }
+    }
+    plugins
+}
+
+impl PluginManager {
+    /// Scan the single unified plugin root (`<exe_dir>/plugins`) and build the
+    /// manager; no processes are started (lazy spawn). The caller supplies the
+    /// root resolved by core::get_plugin_dir.
+    pub fn discover(app: &AppHandle, root: &Path) -> Self {
+        let plugins = discover_plugins(root);
         Self {
             app: app.clone(),
             plugins: Arc::new(Mutex::new(plugins)),
             lifecycle: Arc::new(Mutex::new(())),
         }
-    }
-
-    /// 内置插件目录（打包后位于资源目录；开发时位于仓库根 `plugins/`）。
-    pub fn builtin_plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-        // 开发模式：仓库根目录的 plugins/
-        if let Ok(cwd) = std::env::current_dir() {
-            for ancestor in cwd.ancestors().take(4) {
-                let candidate = ancestor.join("plugins");
-                if candidate.is_dir() {
-                    dirs.push(candidate);
-                    break;
-                }
-            }
-        }
-        // 生产模式：resource_dir/plugins
-        if let Ok(resource) = app.path().resource_dir() {
-            let candidate = resource.join("plugins");
-            if candidate.is_dir() {
-                dirs.push(candidate);
-            }
-        }
-        dirs
-    }
-
-    /// The app-owned user directory is always searched, even with custom roots.
-    pub fn plugin_dirs(app: &AppHandle, custom_dirs: &[PathBuf]) -> Vec<PathBuf> {
-        merge_plugin_dirs(
-            Self::builtin_plugin_dirs(app),
-            crate::core::get_default_plugins_dir(app),
-            custom_dirs,
-        )
-    }
-
-    /// 在不停止已有进程的前提下，把新扫描到的插件目录并入注册表。
-    /// 供 GitHub 安装后/目录变更探测使用；已有条目保持原状态与进程。
-    pub fn register_new(&self, plugin_dirs: &[PathBuf]) {
-        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
-        self.register_new_locked(plugin_dirs, None);
     }
 
     /// 仅替换指定名称的注册条目并停止其既有进程。
@@ -257,14 +220,14 @@ impl PluginManager {
     pub fn install_and_register_new<T, E>(
         &self,
         plugin_name: &str,
-        plugin_dirs: &[PathBuf],
+        plugin_root: &Path,
         activate: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
         install_transition(
             &self.lifecycle,
             || self.stop_locked(plugin_name),
             activate,
-            || self.register_new_locked(plugin_dirs, Some(plugin_name)),
+            || self.register_new_locked(plugin_root, Some(plugin_name)),
         )
     }
 
@@ -283,8 +246,8 @@ impl PluginManager {
 
     /// Caller owns lifecycle; only the explicitly stopped replacement may be
     /// overwritten. Other entries keep their state and process.
-    fn register_new_locked(&self, plugin_dirs: &[PathBuf], replacement: Option<&str>) {
-        let fresh = Self::discover(&self.app, plugin_dirs);
+    fn register_new_locked(&self, plugin_root: &Path, replacement: Option<&str>) {
+        let fresh = Self::discover(&self.app, plugin_root);
         let fresh_map = Arc::try_unwrap(fresh.plugins)
             .map(|m| m.into_inner().expect("fresh map poisoned"))
             .unwrap_or_default();
@@ -448,10 +411,10 @@ impl PluginManager {
     /// 新增插件目录 = 新增一个目录，不需要改主程序；
     /// `reload` 允许前端按钮触发重新发现。
     /// 同时清理「已不存在于任何插件目录」的孤儿 venv。
-    pub fn reload(&self, plugin_dirs: &[PathBuf]) {
+    pub fn reload(&self, plugin_root: &Path) {
         let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
         self.stop_all_locked();
-        self.rediscover_locked(plugin_dirs);
+        self.rediscover_locked(plugin_root);
     }
 
     /// Only call after staging/validation, with settings → install locks held.
@@ -459,19 +422,19 @@ impl PluginManager {
     /// failed switch so the restored install remains runnable.
     pub fn install_and_reload<T, E>(
         &self,
-        plugin_dirs: &[PathBuf],
+        plugin_root: &Path,
         activate: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
         install_transition(
             &self.lifecycle,
             || self.stop_all_locked(),
             activate,
-            || self.rediscover_locked(plugin_dirs),
+            || self.rediscover_locked(plugin_root),
         )
     }
 
-    fn rediscover_locked(&self, plugin_dirs: &[PathBuf]) {
-        let fresh = Self::discover(&self.app, plugin_dirs);
+    fn rediscover_locked(&self, plugin_root: &Path) {
+        let fresh = Self::discover(&self.app, plugin_root);
         let fresh_map = Arc::try_unwrap(fresh.plugins)
             .map(|m| m.into_inner().expect("fresh map poisoned"))
             .unwrap_or_default();
@@ -824,7 +787,7 @@ pub const fn protocol_version() -> &'static str {
 /// - 相对路径：基于当前工作目录拼接为绝对路径，不 canonicalize（避免要求文件已存在）。
 ///
 /// 用于防御前端或旧代码传入相对路径导致插件校验失败的情况。
-fn normalize_absolute_path(path: &std::path::Path) -> Result<PathBuf, String> {
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, String> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
     } else {
@@ -832,22 +795,6 @@ fn normalize_absolute_path(path: &std::path::Path) -> Result<PathBuf, String> {
             .map(|cwd| cwd.join(path))
             .map_err(|e| format!("无法获取当前工作目录: {e}"))
     }
-}
-
-fn merge_plugin_dirs(
-    mut builtin_dirs: Vec<PathBuf>,
-    default_dir: PathBuf,
-    custom_dirs: &[PathBuf],
-) -> Vec<PathBuf> {
-    builtin_dirs.push(default_dir);
-    builtin_dirs.extend_from_slice(custom_dirs);
-    let mut unique = Vec::new();
-    for dir in builtin_dirs {
-        if !unique.contains(&dir) {
-            unique.push(dir);
-        }
-    }
-    unique
 }
 
 #[cfg(test)]
@@ -1000,27 +947,29 @@ mod directory_tests {
     }
 
     #[test]
-    fn keeps_builtin_and_default_roots_with_multiple_custom_directories() {
-        let builtin = PathBuf::from("builtin");
-        let default = PathBuf::from("app-data/plugins");
-        let first = PathBuf::from("custom-first");
-        let second = PathBuf::from("custom-second");
-        assert_eq!(
-            merge_plugin_dirs(
-                vec![builtin.clone()],
-                default.clone(),
-                &[
-                    first.clone(),
-                    default.clone(),
-                    second.clone(),
-                    first.clone()
-                ],
-            ),
-            vec![builtin.clone(), default.clone(), first, second],
-        );
-        assert_eq!(
-            merge_plugin_dirs(vec![builtin.clone()], default.clone(), &[]),
-            vec![builtin, default],
-        );
+    fn discovery_scans_only_the_single_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        for (base, name) in [(root.path(), "plugin-a"), (outside.path(), "plugin-b")] {
+            let dir = base.join(name);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("plugin.json"),
+                serde_json::json!({
+                    "protocolVersion": "1.0.0", "name": name, "version": "1.0",
+                    "description": "t", "author": "t", "entry": "main.py",
+                    "runtime": "python", "capabilities": [],
+                    "parametersSchema": {}, "outputSchema": {}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(dir.join("main.py"), b"").unwrap();
+        }
+        let plugins = discover_plugins(root.path());
+        let names: Vec<_> = plugins.keys().cloned().collect();
+        assert_eq!(names, ["plugin-a".to_string()]);
+        assert!(discover_plugins(&outside.path().join("missing")).is_empty());
+        assert!(discover_plugins(&outside.path().join("plugin-b/main.py")).is_empty());
     }
 }

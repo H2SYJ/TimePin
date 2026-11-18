@@ -17,7 +17,6 @@ const defaultSettings: Settings = {
   language: 'zh-CN',
   theme: 'system',
   hardwareAcceleration: true,
-  customPluginDirs: [],
   pythonPath: null,
   useSystemPython: false,
   recentFiles: [],

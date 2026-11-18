@@ -6,7 +6,12 @@
 use crate::core::github::{
     api_url, ErrorCode, GitHubApiError, GitHubClient, GitHubRateInfo, GitHubResponse, GitHubSession,
 };
-use crate::plugins::archive::{extract_zip, ExtractionLimits, Layout, EXTRACTION_LIMITS};
+use crate::plugins::archive::{
+    extract_zip, safe_component, ExtractionLimits, Layout, EXTRACTION_LIMITS,
+};
+use crate::plugins::package::{
+    install_target, reject_link_ancestors, reject_same_root_alias, switch_install, validate_target,
+};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -330,17 +335,12 @@ pub async fn clear_github_token(
 }
 
 /// 检查本地插件目录中是否已安装同名插件（按 manifest.name 目录名）
-fn find_local_install(manifest_name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
-    if !safe_plugin_name(manifest_name) {
+fn find_local_install(manifest_name: &str, root: &Path) -> Option<PathBuf> {
+    if !root.is_absolute() || !safe_plugin_name(manifest_name) {
         return None;
     }
-    for dir in dirs {
-        let candidate = dir.join(manifest_name);
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    None
+    let candidate = root.join(manifest_name);
+    candidate.is_dir().then_some(candidate)
 }
 
 #[command(rename_all = "camelCase")]
@@ -354,7 +354,7 @@ pub async fn discover_github_plugins(
         &client,
         page.unwrap_or(1).max(1),
         per_page.unwrap_or(20).clamp(1, 100),
-        &crate::commands::plugins::plugin_dirs(&app_handle),
+        &crate::core::get_plugin_dir(&app_handle),
     )
     .await
 }
@@ -374,7 +374,7 @@ pub(crate) async fn discover(
     client: &GitHubClient,
     page: u32,
     per_page: u32,
-    plugin_dirs: &[PathBuf],
+    plugin_root: &Path,
 ) -> Result<DiscoverPluginsResult, GitHubApiError> {
     let (repos, total_count, search_rate, search_rate_limits) =
         search_repositories(client, page, per_page).await?;
@@ -391,7 +391,7 @@ pub(crate) async fn discover(
                 if let Some(rate) = rate {
                     upsert_rate_snapshot(&mut rate_limits, rate);
                 }
-                let local = find_local_install(&manifest.name, plugin_dirs);
+                let local = find_local_install(&manifest.name, plugin_root);
                 (Some(manifest), None, local)
             }
             Ok((None, rate)) => {
@@ -459,7 +459,7 @@ fn extract_zip_with_limits(
 }
 
 fn safe_plugin_name(name: &str) -> bool {
-    !name.is_empty()
+    safe_component(name)
         && !matches!(name, "." | "..")
         // Same policy as local PluginManifest::validate().
         && name
@@ -476,19 +476,8 @@ struct PreparedArchive {
 
 impl PreparedArchive {
     fn activate(self) -> Result<PathBuf, GitHubApiError> {
-        let had_existing = self.target.exists();
-        if had_existing {
-            std::fs::rename(&self.target, &self.backup)
-                .map_err(|_| GitHubApiError::client("备份旧插件目录失败"))?;
-        }
-        if std::fs::rename(&self.staging, &self.target).is_err() {
-            if had_existing && std::fs::rename(&self.backup, &self.target).is_err() {
-                return Err(GitHubApiError::client(
-                    "安装切换失败，旧插件已保留在 .timepin-installs 下的 .bak 目录，请手动恢复",
-                ));
-            }
-            return Err(GitHubApiError::client("安装切换失败，旧插件已恢复"));
-        }
+        switch_install(&self.staging, &self.target, &self.backup)
+            .map_err(GitHubApiError::client)?;
         Ok(self.target.clone())
     }
 }
@@ -502,7 +491,7 @@ impl Drop for PreparedArchive {
 }
 
 /// Caller holds the shared install lock from staging through stop/switch/reload.
-/// Downloads finish before taking any settings, install or lifecycle locks.
+/// Downloads finish before taking install or lifecycle locks.
 fn prepare_archive(
     zip: &[u8],
     manifest: &PluginManifest,
@@ -511,11 +500,16 @@ fn prepare_archive(
     if !safe_plugin_name(&manifest.name) {
         return Err(GitHubApiError::client("插件名称不能作为安全目录名"));
     }
-    std::fs::create_dir_all(primary).map_err(|_| GitHubApiError::client("创建插件根目录失败"))?;
+    crate::core::ensure_plugin_dir(primary).map_err(GitHubApiError::client)?;
+    reject_link_ancestors(primary).map_err(GitHubApiError::client)?;
+    let target = install_target(primary, &manifest.name).map_err(GitHubApiError::client)?;
+    validate_target(&target).map_err(GitHubApiError::client)?;
+    reject_same_root_alias(primary, &target, &manifest.name).map_err(GitHubApiError::client)?;
     // Transactions live below direct discovery children.
     let workspace = primary.join(".timepin-installs");
     std::fs::create_dir_all(&workspace)
         .map_err(|_| GitHubApiError::client("创建插件事务目录失败"))?;
+    reject_link_ancestors(&workspace).map_err(GitHubApiError::client)?;
     let staging = workspace.join(format!("stage-{}", uuid::Uuid::new_v4()));
     if std::fs::create_dir(&staging).is_err() {
         let _ = std::fs::remove_dir(&workspace);
@@ -523,7 +517,7 @@ fn prepare_archive(
     }
     let install = PreparedArchive {
         staging,
-        target: primary.join(&manifest.name),
+        target,
         backup: workspace.join(format!("{}.bak-{}", manifest.name, uuid::Uuid::new_v4())),
         workspace,
     };
@@ -569,27 +563,19 @@ pub async fn install_github_plugin(
             "manifest 校验失败或插件目录名不安全",
         ));
     }
-    // Bundled search roots can be read-only (e.g. Program Files). Community installs
-    // always use the writable, app-owned root, not the first discovery directory.
-    let primary = crate::core::get_default_plugins_dir(&app_handle);
+    let primary = crate::core::get_plugin_dir(&app_handle);
     let url = api_url(&["repos", &owner, &repo, "zipball", &branch], &[])?;
     let archive = client.public_zip(url).await?;
     let plugin_name = manifest.name.clone();
     let activation_name = plugin_name.clone();
     let manager = manager.inner().clone();
-    let app = app_handle.clone();
     let plugin_dir = tauri::async_runtime::spawn_blocking(move || {
-        let _settings_guard = crate::core::settings::settings_lock_guard();
-        let settings = crate::core::settings::load_settings(&app)
-            .map_err(|e| GitHubApiError::client(format!("读取设置失败：{e}")))?;
         let _install_guard =
             crate::plugins::package::install_lock_guard().map_err(GitHubApiError::client)?;
         let install = prepare_archive(&archive.body, &manifest, &primary)?;
-        let dirs =
-            crate::plugins::manager::PluginManager::plugin_dirs(&app, &settings.custom_plugin_dirs);
         // TPIN-18: a GitHub install only replaces its own plugin entry and
         // must not stop every plugin the way a local package import does.
-        manager.install_and_register_new(&activation_name, &dirs, || install.activate())
+        manager.install_and_register_new(&activation_name, &primary, || install.activate())
     })
     .await
     .map_err(|_| GitHubApiError::client("插件安装任务失败"))??;
@@ -662,16 +648,12 @@ mod tests {
         let primary = root.path();
         std::thread::scope(|scope| {
             let local = scope.spawn(move || {
-                crate::plugins::package::import_package(
-                    request,
-                    &[primary.to_path_buf()],
-                    |install| {
-                        let result = install.activate()?;
-                        reloading_tx.send(()).unwrap();
-                        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                        Ok(result)
-                    },
-                )
+                crate::plugins::package::import_package(request, primary, |install| {
+                    let result = install.activate()?;
+                    reloading_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(result)
+                })
                 .unwrap();
             });
             reloading_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -697,6 +679,30 @@ mod tests {
             std::fs::read(root.path().join("example-plugin/main.py")).unwrap(),
             b"github"
         );
+    }
+
+    #[test]
+    fn github_install_cannot_replace_the_bundled_recognition_service() {
+        for name in ["recognition", "ReCoGnItIoN"] {
+            let root = tempfile::tempdir().unwrap();
+            let service = root.path().join("recognition");
+            std::fs::create_dir(&service).unwrap();
+            std::fs::write(service.join("main.py"), b"bundled service").unwrap();
+            let mut manifest = valid_manifest();
+            manifest.name = name.to_owned();
+            let json = serde_json::to_vec(&manifest).unwrap();
+            let zip = build_zip(&[
+                ("root/plugin.json", &json),
+                ("root/main.py", b"replacement"),
+            ]);
+            let error = activate_archive(&zip, &manifest, root.path()).unwrap_err();
+            assert!(error.message.contains("内置识别服务保留目录"));
+            assert_eq!(
+                std::fs::read(service.join("main.py")).unwrap(),
+                b"bundled service"
+            );
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        }
     }
 
     #[test]
@@ -823,7 +829,7 @@ mod tests {
             "bad.",
         ] {
             assert!(!safe_plugin_name(name));
-            assert!(find_local_install(name, &[]).is_none());
+            assert!(find_local_install(name, Path::new("")).is_none());
         }
         assert!(validate_repository("owner?x=1", "repo").is_err());
         assert!(validate_repository("owner", "repo/../../x").is_err());

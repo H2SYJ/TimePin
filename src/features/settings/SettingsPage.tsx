@@ -18,7 +18,6 @@ const summaryLabels: Record<string, string> = {
 
 function fieldIdFor(key: string): string | undefined {
   if (key in summaryLabels) return `field-${key}`;
-  if (key.startsWith('plugin-')) return key;
   return undefined;
 }
 
@@ -132,7 +131,7 @@ export function SettingsPage() {
                       href={fieldIdFor(key) ? `#${fieldIdFor(key)}` : undefined}
                       className="underline underline-offset-2"
                     >
-                      {summaryLabels[key] ?? (key.startsWith('plugin-') ? `插件搜索目录 ${Number(key.split('-')[1]) + 1}` : key)}
+                      {summaryLabels[key] ?? key}
                     </a>
                     ：{errors[key]}
                   </li>
