@@ -22,33 +22,20 @@ pub async fn import_plugin(
 ) -> Result<ImportPluginResult, String> {
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Keep this snapshot current until activation and environment cleanup finish.
+        // Keep admission ordering consistent with Python process launches.
         let _settings_guard = crate::core::settings::settings_lock_guard();
-        let settings = crate::core::settings::load_settings(&app_handle)
-            .map_err(|e| format!("读取已保存设置失败：{e}"))?;
+        let root = crate::core::get_plugin_dir(&app_handle);
         crate::plugins::package::import_package(
             ImportPluginRequest {
                 source,
                 schema_version: schema_version.unwrap_or_else(|| IMPORT_SCHEMA_VERSION.to_owned()),
             },
-            &settings.custom_plugin_dirs,
-            |install| {
-                manager.install_and_reload(
-                    &PluginManager::plugin_dirs(&app_handle, &settings.custom_plugin_dirs),
-                    || install.activate(),
-                )
-            },
+            &root,
+            |install| manager.install_and_reload(&root, || install.activate()),
         )
     })
     .await
     .map_err(|e| format!("插件导入任务失败：{e}"))?
-}
-
-pub fn plugin_dirs(app: &AppHandle) -> Vec<PathBuf> {
-    let custom_dirs = crate::core::settings::load_settings(app)
-        .map(|settings| settings.custom_plugin_dirs)
-        .unwrap_or_default();
-    PluginManager::plugin_dirs(app, &custom_dirs)
 }
 
 #[tauri::command]
@@ -60,48 +47,16 @@ pub async fn get_plugins(
     Ok(manager.list(settings.as_ref()))
 }
 
-/// 只允许打开已保存的自定义搜索根，或应用自有的默认目录。
+/// 只打开可执行文件旁的统一插件目录，不接收任意路径或旧目录索引。
 #[tauri::command]
-pub async fn open_plugin_directory(
-    app_handle: AppHandle,
-    index: Option<usize>,
-) -> Result<(), String> {
+pub async fn open_plugin_directory(app_handle: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let settings =
-            crate::core::settings::load_settings(&app_handle).map_err(|error| error.to_string())?;
-        let path = select_plugin_directory(
-            crate::core::get_default_plugins_dir(&app_handle),
-            &settings.custom_plugin_dirs,
-            index,
-        )?;
-        if index.is_none() {
-            std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-        }
-        if !path.is_dir() {
-            return Err("插件目录不存在或不是目录，请检查已保存的设置".to_string());
-        }
-        open_directory(&path)
+        let root = crate::core::get_plugin_dir(&app_handle);
+        crate::core::ensure_plugin_dir(&root)?;
+        open_directory(&root)
     })
     .await
     .map_err(|error| error.to_string())?
-}
-
-fn select_plugin_directory(
-    default_directory: PathBuf,
-    custom_directories: &[PathBuf],
-    index: Option<usize>,
-) -> Result<PathBuf, String> {
-    let path = match index {
-        None => default_directory,
-        Some(index) => custom_directories
-            .get(index)
-            .cloned()
-            .ok_or_else(|| "自定义插件目录索引无效，请先保存设置".to_string())?,
-    };
-    if !path.is_absolute() {
-        return Err("插件目录必须是绝对路径".to_string());
-    }
-    Ok(path)
 }
 
 fn open_directory(path: &std::path::Path) -> Result<(), String> {
@@ -145,8 +100,9 @@ pub async fn reload_plugins(
         let _settings_guard = crate::core::settings::settings_lock_guard();
         let settings = crate::core::settings::load_settings(&app_handle)
             .map_err(|e| format!("读取设置失败：{e}"))?;
-        let dirs = PluginManager::plugin_dirs(&app_handle, &settings.custom_plugin_dirs);
-        manager.reload(&dirs);
+        let root = crate::core::get_plugin_dir(&app_handle);
+        crate::core::ensure_plugin_dir(&root)?;
+        manager.reload(&root);
         Ok(manager.list(Some(&settings)))
     })
     .await
@@ -280,33 +236,4 @@ pub async fn run_plugins(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-mod directory_tests {
-    use super::*;
-
-    #[test]
-    fn opens_only_saved_roots_or_app_owned_default() {
-        let root = tempfile::tempdir().unwrap();
-        let default = root.path().join("app-data/plugins");
-        let first = root.path().join("custom-first");
-        let second = root.path().join("custom-second");
-        let custom = vec![first.clone(), second.clone()];
-        assert_eq!(
-            select_plugin_directory(default.clone(), &custom, None).unwrap(),
-            default
-        );
-        assert_eq!(
-            select_plugin_directory(default.clone(), &custom, Some(0)).unwrap(),
-            first
-        );
-        assert_eq!(
-            select_plugin_directory(default.clone(), &custom, Some(1)).unwrap(),
-            second
-        );
-        assert!(select_plugin_directory(default.clone(), &custom, Some(2)).is_err());
-        assert!(select_plugin_directory(default, &[], Some(0)).is_err());
-        assert!(select_plugin_directory(PathBuf::from("relative"), &[], None).is_err());
-    }
 }

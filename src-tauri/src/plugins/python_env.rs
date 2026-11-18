@@ -707,45 +707,6 @@ pub fn remove_plugin_environment(
     Ok(())
 }
 
-/// 重建所有插件环境（设置页「重建所有插件环境」按钮）。
-/// 返回 (plugin_name → Result) 供前端展示；单插件失败不影响其他。
-pub fn rebuild_all_environments(
-    app: &AppHandle,
-    plugin_dirs: &[PathBuf],
-    settings: &crate::core::settings::Settings,
-) -> Vec<(String, Result<PathBuf, String>)> {
-    let mut results = Vec::new();
-    for dir in plugin_dirs {
-        if !dir.is_dir() {
-            continue;
-        }
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let plugin_dir = entry.path();
-            if !plugin_dir.is_dir() {
-                continue;
-            }
-            let manifest = match PluginManifest::load(&plugin_dir) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            // 只对声明了依赖的 Python 插件建环境
-            if manifest.runtime != crate::plugins::manifest::PluginRuntime::Python
-                || manifest.dependencies.is_empty()
-            {
-                continue;
-            }
-            let result = ensure_python_environment(&manifest, &plugin_dir, app, settings)
-                .map_err(|e| e.to_string());
-            results.push((manifest.name.clone(), result));
-        }
-    }
-    results
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

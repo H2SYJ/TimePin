@@ -744,9 +744,10 @@ async fn discovery_uses_real_snake_case_github_input_and_search_headline_rate() 
         ],
         None,
     );
-    let result = crate::commands::github_plugins::discover(&client, 1, 20, &[])
-        .await
-        .unwrap();
+    let result =
+        crate::commands::github_plugins::discover(&client, 1, 20, std::path::Path::new(""))
+            .await
+            .unwrap();
     let value = serde_json::to_value(result).unwrap();
     assert_eq!(value["schemaVersion"], "1.0.0");
     assert_eq!(
@@ -790,7 +791,7 @@ async fn manifest_rate_limit_bubbles_and_stops_all_later_requests() {
         ],
         None,
     );
-    let error = crate::commands::github_plugins::discover(&client, 1, 20, &[])
+    let error = crate::commands::github_plugins::discover(&client, 1, 20, std::path::Path::new(""))
         .await
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::SecondaryRateLimit);
@@ -1617,9 +1618,10 @@ async fn missing_resource_in_manifest_errors_keeps_one_latest_core_snapshot() {
         ],
         None,
     );
-    let result = crate::commands::github_plugins::discover(&client, 1, 20, &[])
-        .await
-        .unwrap();
+    let result =
+        crate::commands::github_plugins::discover(&client, 1, 20, std::path::Path::new(""))
+            .await
+            .unwrap();
     assert_eq!(
         result.rate_limit.unwrap().resource.as_deref(),
         Some("search")
@@ -2408,7 +2410,7 @@ async fn invalid_manifest_body_is_evicted_and_never_replayed() {
         ],
         None,
     );
-    let first = crate::commands::github_plugins::discover(&client, 1, 20, &[])
+    let first = crate::commands::github_plugins::discover(&client, 1, 20, std::path::Path::new(""))
         .await
         .unwrap();
     assert!(first.plugins[0].manifest.is_none());
@@ -2417,9 +2419,10 @@ async fn invalid_manifest_body_is_evicted_and_never_replayed() {
     assert!(store.values.lock().unwrap().is_empty());
     // The second discovery must clear the 6-second anonymous search pacing window.
     clock.advance(6_001);
-    let second = crate::commands::github_plugins::discover(&client, 1, 20, &[])
-        .await
-        .unwrap();
+    let second =
+        crate::commands::github_plugins::discover(&client, 1, 20, std::path::Path::new(""))
+            .await
+            .unwrap();
     assert_eq!(
         second.plugins[0].manifest.as_ref().map(|m| m.name.as_str()),
         Some("x")

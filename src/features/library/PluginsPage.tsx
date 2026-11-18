@@ -11,7 +11,7 @@ import { inferParamKind, type PluginParamSchema } from '@/types';
 import { resolveLocalizedText } from '@/lib/localization';
 
 export function PluginsPage() {
-  const { settings } = useAppStore();
+  const settings = useAppStore((state) => state.settings);
   const [activeTab, setActiveTab] = useState<'local' | 'discover'>('local');
   const [discoveryVisited, setDiscoveryVisited] = useState(false);
   const [plugins, setPlugins] = useState<any[]>([]);
@@ -50,7 +50,6 @@ export function PluginsPage() {
     return loadPlugins();
   }, [loadPlugins]);
   const packageImport = usePluginImport(activeTab === 'local', refreshAfterImport);
-  const firstPluginDirectory = settings.customPluginDirs?.[0]?.trim();
 
   useEffect(() => {
     void loadPlugins();
@@ -237,14 +236,7 @@ export function PluginsPage() {
                     <p className="mt-1 text-sm text-default-500">支持 .tppkg / .zip，一次一个，压缩包最大 128 MiB。</p>
                   </div>
                   <p className="text-sm text-default-600">仅导入信任的包。导入会覆盖同名插件，并重新加载、停止所有正在运行的插件。</p>
-                  {firstPluginDirectory ? (
-                    <p className="max-w-full break-all text-sm text-default-500">导入到第一个已保存的自定义插件目录：{firstPluginDirectory}</p>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-warning">
-                      <span>请先添加并保存自定义插件目录，不会写入内置目录。</span>
-                      <Button size="sm" variant="secondary" onPress={() => useAppStore.getState().setPage('settings')}>前往设置</Button>
-                    </div>
-                  )}
+                  <p className="max-w-full break-all text-sm text-default-500">插件统一导入到 TimePin 可执行文件同级的 plugins 文件夹，无需配置目录。</p>
                 </div>
                 {packageImport.feedback && (
                   <p
@@ -265,7 +257,7 @@ export function PluginsPage() {
                     <span className="text-sm">加载插件中…</span>
                   </div>
                 ) : plugins.length === 0 ? (
-                  <Section title="未发现插件" description="在 plugins/ 目录或设置的自定义插件目录下放入 plugin.json + 入口文件，点击「重新加载」即可发现。">
+                  <Section title="未发现插件" description="在可执行文件同级 plugins/ 目录下放入 plugin.json + 入口文件，点击「重新加载」即可发现。">
                     <div className="flex flex-col items-center gap-3 text-default-400 py-8">
                       <Code className="h-12 w-12 opacity-30" aria-hidden="true" />
                       <p className="text-sm">未发现插件</p>

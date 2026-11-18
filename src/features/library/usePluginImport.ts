@@ -1,7 +1,6 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, isTauri } from '@/lib/ipc';
-import { useAppStore } from '@/stores/app';
 import type { PluginImportSource } from '@/types';
 
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
@@ -46,11 +45,6 @@ export function usePluginImport(active: boolean, refreshPlugins: () => Promise<b
 
   const importSource = useCallback(async (getSource: () => Promise<PluginImportSource | null>) => {
     if (!activeRef.current || inFlight.current || !mounted.current) return;
-    // Store 仅在保存成功后更新；不读取设置页尚未保存的 draft，也不回退到内置目录。
-    if (!useAppStore.getState().settings.customPluginDirs?.[0]?.trim()) {
-      setFeedback({ kind: 'error', message: '请先前往设置，添加并保存第一个自定义插件目录，再导入插件。' });
-      return;
-    }
     inFlight.current = true;
     setBusy(true);
     setFeedback(null);

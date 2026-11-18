@@ -10,7 +10,7 @@ beforeEach(() => { vi.mocked(invoke).mockReset(); vi.mocked(open).mockReset(); v
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('advanced settings IPC contract', () => {
-  it('passes camelCase payloads and saved directory indices to backend commands', async () => {
+  it('passes camelCase payloads and opens the unified directory without arguments', async () => {
     const settings = { ...useAppStore.getState().settings, ffprobePath: 'D:/ffprobe.exe' };
     await api.getAdvancedSettingsInfo();
     expect(invoke).toHaveBeenLastCalledWith('get_advanced_settings_info');
@@ -18,10 +18,8 @@ describe('advanced settings IPC contract', () => {
     expect(invoke).toHaveBeenLastCalledWith('validate_dependencies', { settings });
     await api.saveSettings(settings);
     expect(invoke).toHaveBeenLastCalledWith('save_settings', { settings });
-    await api.openPluginDirectory(1);
-    expect(invoke).toHaveBeenLastCalledWith('open_plugin_directory', { index: 1 });
-    await api.openPluginDirectory(null);
-    expect(invoke).toHaveBeenLastCalledWith('open_plugin_directory', { index: null });
+    await api.openPluginDirectory();
+    expect(invoke).toHaveBeenLastCalledWith('open_plugin_directory');
     await api.installDependencies('attempt-1');
     expect(invoke).toHaveBeenLastCalledWith('install_dependencies', { taskId: 'attempt-1' });
   });
@@ -30,7 +28,7 @@ describe('advanced settings IPC contract', () => {
     vi.mocked(open).mockResolvedValueOnce(null).mockResolvedValueOnce('D:/plugins').mockResolvedValueOnce('D:/export').mockResolvedValueOnce('D:/ffmpeg.exe');
     expect(await api.pickExecutable('ffprobe')).toBeNull();
     expect(await api.pickDirectory()).toBe('D:/plugins');
-    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false, title: '选择插件搜索目录' }));
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false, title: '选择目录' }));
     expect(await api.pickDirectory('选择导出目录')).toBe('D:/export');
     expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false, title: '选择导出目录' }));
     expect(await api.pickExecutable('ffmpeg')).toBe('D:/ffmpeg.exe');
@@ -53,7 +51,7 @@ describe('advanced settings IPC contract', () => {
     await expect(api.validateDependencies(settings)).rejects.toThrow(/桌面应用/);
     await expect(api.installDependencies('attempt-1')).rejects.toThrow(/桌面应用/);
     await expect(api.onDependencyInstallProgress(vi.fn())).rejects.toThrow(/桌面应用/);
-    await expect(api.openPluginDirectory(null)).rejects.toThrow(/桌面应用/);
+    await expect(api.openPluginDirectory()).rejects.toThrow(/桌面应用/);
     await expect(api.pickDirectory()).rejects.toThrow(/桌面应用/);
     await expect(api.pickExecutable('ffmpeg')).rejects.toThrow(/桌面应用/);
     expect(invoke).not.toHaveBeenCalled();

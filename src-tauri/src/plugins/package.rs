@@ -1,5 +1,6 @@
 //! Local ZIP import: validate in an isolated transaction before replacing an install.
-//! Never executes a package, installs dependencies, or chooses a bundled search root.
+//! Never executes a package or installs dependencies. The caller supplies the
+//! single `<exe_dir>/plugins` root; package preparation remains unit-testable.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ pub struct ImportPluginResult {
 /// that callback (stop → activate → reload); it must not install recursively.
 pub fn import_package(
     request: ImportPluginRequest,
-    custom_dirs: &[PathBuf],
+    plugin_root: &Path,
     on_validated: impl FnOnce(PreparedInstall) -> Result<ImportPluginResult, String>,
 ) -> Result<ImportPluginResult, String> {
     let _guard = install_lock_guard()?;
@@ -72,18 +73,10 @@ pub fn import_package(
             request.schema_version
         ));
     }
-    let primary = custom_dirs.first().ok_or_else(|| {
-        "请先前往「设置 → 自定义插件目录」添加并保存目录，然后再导入插件 ZIP".to_owned()
-    })?;
-    if !primary.is_absolute() || !primary.is_dir() {
-        return Err(
-            "第一个已保存的自定义插件目录不存在或不是绝对目录，请前往设置检查并保存".into(),
-        );
-    }
-    reject_link_ancestors(primary)?;
+    crate::core::ensure_plugin_dir(plugin_root)?;
+    reject_link_ancestors(plugin_root)?;
     let bytes = read_source(request.source)?;
-    let install = prepare_install(&bytes, primary)?;
-    reject_shadowed_install(&install.manifest.name, primary, &custom_dirs[1..])?;
+    let install = prepare_install(&bytes, plugin_root)?;
     on_validated(install)
 }
 
@@ -158,13 +151,13 @@ fn is_link(metadata: &fs::Metadata) -> bool {
     }
 }
 
-fn reject_link_ancestors(path: &Path) -> Result<(), String> {
+pub(crate) fn reject_link_ancestors(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         let metadata =
             fs::symlink_metadata(ancestor).map_err(|e| format!("检查插件目录失败：{e}"))?;
         if is_link(&metadata) {
             return Err(
-                "插件安装目录不允许符号链接或 Windows reparse point，请更换自定义目录".into(),
+                "插件安装目录不允许符号链接或 Windows reparse point，请检查可执行文件旁的 plugins 目录".into(),
             );
         }
     }
@@ -254,7 +247,12 @@ fn validated_manifest(root: &Path) -> Result<PluginManifest, String> {
     Ok(manifest)
 }
 
-fn install_target(primary: &Path, name: &str) -> Result<PathBuf, String> {
+pub(crate) fn install_target(primary: &Path, name: &str) -> Result<PathBuf, String> {
+    // The recognition sidecar shares this root but has an independent process
+    // lifecycle. Ordinary plugin installs must never replace its fixed directory.
+    if name.eq_ignore_ascii_case("recognition") {
+        return Err("recognition 是内置识别服务保留目录，不能通过插件安装覆盖".into());
+    }
     // Apply Windows-style identity on every OS to avoid duplicate installs which
     // would alias on Windows. Never follow links when inspecting an old target.
     let mut matches = fs::read_dir(primary)
@@ -322,7 +320,11 @@ fn prepare_install(bytes: &[u8], primary: &Path) -> Result<PreparedInstall, Stri
 
 /// Other direct children of the install root can own manifest.name too; unordered
 /// discovery could resolve them before this install or the two would fight.
-fn reject_same_root_alias(primary: &Path, target: &Path, name: &str) -> Result<(), String> {
+pub(crate) fn reject_same_root_alias(
+    primary: &Path,
+    target: &Path,
+    name: &str,
+) -> Result<(), String> {
     let canonical_target = target.canonicalize();
     let entries = fs::read_dir(primary).map_err(|e| e.to_string())?;
     for entry in entries.flatten() {
@@ -344,47 +346,7 @@ fn reject_same_root_alias(primary: &Path, target: &Path, name: &str) -> Result<(
     Ok(())
 }
 
-fn reject_shadowed_install(
-    name: &str,
-    primary: &Path,
-    later_dirs: &[PathBuf],
-) -> Result<(), String> {
-    // Match discovery's first-occurrence de-duplication, then inspect the last
-    // effective root first. A later canonical alias can make this install win.
-    let mut unique = vec![primary.to_path_buf()];
-    for later in later_dirs {
-        if !unique.contains(later) {
-            unique.push(later.clone());
-        }
-    }
-    let canonical_primary = primary.canonicalize().map_err(|e| e.to_string())?;
-    for later in unique[1..].iter().rev() {
-        // Discovery uses manifest.name, not the enclosing directory's name.
-        if later
-            .canonicalize()
-            .is_ok_and(|path| path == canonical_primary)
-        {
-            return Ok(());
-        }
-        let Ok(entries) = fs::read_dir(later) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir()
-                && PluginManifest::load(&path).is_ok_and(|manifest| manifest.name == name)
-            {
-                return Err(format!(
-                    "插件 {name} 会被后面的自定义目录 {} 中的同名插件覆盖；请在设置中调整目录顺序或移除该同名插件后重试，原安装未修改",
-                    later.display()
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_target(target: &Path) -> Result<bool, String> {
+pub(crate) fn validate_target(target: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(target) {
         Ok(metadata) if is_link(&metadata) || !metadata.is_dir() => {
             Err("插件安装目标不是普通目录或属于链接/reparse point，已保留原目标".into())
@@ -395,7 +357,7 @@ fn validate_target(target: &Path) -> Result<bool, String> {
     }
 }
 
-fn switch_install(staging: &Path, target: &Path, backup: &Path) -> Result<bool, String> {
+pub(crate) fn switch_install(staging: &Path, target: &Path, backup: &Path) -> Result<bool, String> {
     // Recheck immediately before moving the target. No remove_dir_all(target),
     // even if the previous install has a corrupt/missing manifest.
     let replaced = validate_target(target)?;

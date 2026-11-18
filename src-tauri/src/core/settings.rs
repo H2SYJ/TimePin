@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Unknown legacy fields (including customPluginDirs) are intentionally ignored.
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// 视频导入目录
@@ -27,8 +28,6 @@ pub struct Settings {
     pub theme: Theme,
     /// 是否启用硬件加速
     pub hardware_acceleration: bool,
-    /// 自定义插件目录
-    pub custom_plugin_dirs: Vec<PathBuf>,
     /// 显式 Python 解释器路径（可选；绝对路径，最高优先级）
     pub python_path: Option<PathBuf>,
     /// 是否允许回退到系统 PATH 上的 python/python3（默认 false——
@@ -85,7 +84,6 @@ impl Default for Settings {
             language: "zh-CN".to_string(),
             theme: Theme::default(),
             hardware_acceleration: true,
-            custom_plugin_dirs: Vec::new(),
             python_path: None,
             use_system_python: false,
             recent_files: Vec::new(),
@@ -118,14 +116,6 @@ impl Settings {
         validate_tool_path("ffmpegPath", self.ffmpeg_path.as_ref())?;
         validate_tool_path("ffprobePath", self.ffprobe_path.as_ref())?;
         validate_tool_path("pythonPath", self.python_path.as_ref())?;
-        for dir in &self.custom_plugin_dirs {
-            if !dir.is_absolute() {
-                return Err(format!("自定义插件目录必须是绝对路径：{}", dir.display()));
-            }
-            if !dir.is_dir() {
-                return Err(format!("自定义插件目录不存在或不是目录：{}", dir.display()));
-            }
-        }
         Ok(())
     }
 }
@@ -228,32 +218,11 @@ pub fn save_settings(
     app_handle: &AppHandle,
     settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    save_settings_with_plugin_dirs(app_handle, settings, |_| {})
-}
-
-/// Save and reconcile changed plugin roots under the same write lock, so concurrent
-/// saves cannot leave discovery using older roots than the persisted settings.
-/// The callback must not write settings again while this lock is held.
-pub fn save_settings_with_plugin_dirs<F>(
-    app_handle: &AppHandle,
-    settings: Settings,
-    on_plugin_dirs_changed: F,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    F: FnOnce(&[PathBuf]),
-{
     let _guard = settings_lock_guard();
     settings
         .validate()
         .map_err(|message| -> Box<dyn std::error::Error> { message.into() })?;
-    let custom_dirs_changed = load_settings(app_handle)
-        .map(|previous| previous.custom_plugin_dirs != settings.custom_plugin_dirs)
-        .unwrap_or(true);
-    save_settings_internal(app_handle, &settings)?;
-    if custom_dirs_changed {
-        on_plugin_dirs_changed(&settings.custom_plugin_dirs);
-    }
-    Ok(())
+    save_settings_internal(app_handle, &settings)
 }
 
 /// 更新部分配置
@@ -310,26 +279,17 @@ mod tests {
     }
 
     #[test]
-    fn validates_absolute_existing_plugin_roots_and_restore_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let mut settings = Settings {
-            custom_plugin_dirs: vec![dir.path().to_path_buf(), second.path().to_path_buf()],
-            ..Settings::default()
-        };
-        assert!(settings.validate().is_ok());
-        settings.custom_plugin_dirs = vec![PathBuf::from("relative/plugins")];
-        assert!(settings.validate().is_err());
-        settings.custom_plugin_dirs = vec![dir.path().join("missing")];
-        assert!(settings.validate().is_err());
-        let file = dir.path().join("file");
-        std::fs::write(&file, b"file").unwrap();
-        settings.custom_plugin_dirs = vec![file];
-        assert!(settings.validate().is_err());
-        settings.custom_plugin_dirs.clear();
-        assert!(settings.validate().is_ok());
-        assert!(dir.path().is_dir());
-        assert!(second.path().is_dir());
+    fn legacy_custom_plugin_dirs_deserialize_but_are_never_reserialized() {
+        for legacy in [
+            r#"{"customPluginDirs":["/a","b"]}"#,
+            r#"{"customPluginDirs":"not-an-array"}"#,
+            r#"{"customPluginDirs":null}"#,
+        ] {
+            let settings: Settings = serde_json::from_str(legacy).unwrap();
+            let value = serde_json::to_value(&settings).unwrap();
+            assert!(value.get("customPluginDirs").is_none());
+            assert!(value.get("custom_plugin_dirs").is_none());
+        }
     }
 
     #[test]
