@@ -1,8 +1,116 @@
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
 
 use super::protocol::PROTOCOL_VERSION;
+
+/// 可本地化文本：普通字符串，或 `locale -> text` 映射。
+///
+/// JSON 中接受两种写法：
+/// - `"demo"` 普通字符串（向后兼容）
+/// - `{"en-US": "demo", "zh-CN": "示例"}` 本地化映射
+///
+/// 序列化时保持原样写回：字符串仍是字符串，映射仍是映射。
+/// 解析顺序由 `resolve` 决定：请求语言 -> `en-US` -> 映射中第一个条目 -> 空串。
+/// Map 保留 JSON 文档中的插入顺序，使"第一个条目"回退稳定可测。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalizedText {
+    Text(String),
+    /// (locale, text) 按 JSON 文档顺序保存
+    Map(Vec<(String, String)>),
+}
+
+impl Default for LocalizedText {
+    fn default() -> Self {
+        LocalizedText::Text(String::new())
+    }
+}
+
+impl LocalizedText {
+    /// 回退顺序：`language` -> `en-US` -> 映射首个条目 -> `""`。
+    pub fn resolve(&self, language: &str) -> String {
+        match self {
+            LocalizedText::Text(s) => s.clone(),
+            LocalizedText::Map(entries) => entries
+                .iter()
+                .find(|(k, _)| k == language)
+                .or_else(|| entries.iter().find(|(k, _)| k == "en-US"))
+                .or_else(|| entries.first())
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// 是否为空（空串或空映射 / 全空值不影响判断，仅结构为空）。
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LocalizedText::Text(s) => s.is_empty(),
+            LocalizedText::Map(entries) => entries.is_empty(),
+        }
+    }
+}
+
+impl From<&str> for LocalizedText {
+    fn from(s: &str) -> Self {
+        LocalizedText::Text(s.to_string())
+    }
+}
+
+impl From<String> for LocalizedText {
+    fn from(s: String) -> Self {
+        LocalizedText::Text(s)
+    }
+}
+
+impl Serialize for LocalizedText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            LocalizedText::Text(s) => serializer.serialize_str(s),
+            LocalizedText::Map(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (k, v) in entries {
+                    map.serialize_entry(k, v)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for LocalizedText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct LocalizedTextVisitor;
+
+        impl<'de> Visitor<'de> for LocalizedTextVisitor {
+            type Value = LocalizedText;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a string or a locale-to-string map")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(LocalizedText::Text(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(LocalizedText::Text(value))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some((k, v)) = map.next_entry::<String, String>()? {
+                    entries.push((k, v));
+                }
+                Ok(LocalizedText::Map(entries))
+            }
+        }
+
+        deserializer.deserialize_any(LocalizedTextVisitor)
+    }
+}
 
 /// 插件清单（版本 1）
 ///
@@ -14,7 +122,8 @@ pub struct PluginManifest {
     pub protocol_version: String,
     pub name: String,
     pub version: String,
-    pub description: String,
+    /// 本地化文本：字符串或 `{"en-US": "…", "zh-CN": "…"}` 映射
+    pub description: LocalizedText,
     pub author: String,
     /// 入口文件：runtime=python/node 时为脚本路径，binary/rust 时为可执行文件
     pub entry: String,
@@ -139,7 +248,7 @@ impl Default for PluginManifest {
             protocol_version: PROTOCOL_VERSION.to_string(),
             name: String::new(),
             version: "0.1.0".to_string(),
-            description: String::new(),
+            description: LocalizedText::default(),
             author: String::new(),
             entry: "main.py".to_string(),
             runtime: PluginRuntime::Python,
@@ -243,5 +352,111 @@ mod tests {
         assert!(!m.validate().is_empty());
         m.dependencies = vec!["".to_string()];
         assert!(!m.validate().is_empty());
+    }
+
+    fn manifest_with_description(desc_json: &str) -> PluginManifest {
+        let json = format!(
+            r#"{{"protocolVersion":"1.0.0","name":"demo","version":"1.0.0","description":{desc_json},"author":"t","entry":"main.py","runtime":"python","capabilities":[]}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn localized_text_deserializes_string_and_map() {
+        let m = manifest_with_description(r#""plain text""#);
+        assert_eq!(m.description, LocalizedText::Text("plain text".into()));
+
+        let m = manifest_with_description(r#"{"zh-CN":"中文","en-US":"English"}"#);
+        assert_eq!(
+            m.description,
+            LocalizedText::Map(vec![
+                ("zh-CN".into(), "中文".into()),
+                ("en-US".into(), "English".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn localized_text_resolve_order() {
+        let lt = LocalizedText::Map(vec![
+            ("zh-CN".into(), "中文".into()),
+            ("en-US".into(), "English".into()),
+        ]);
+        assert_eq!(lt.resolve("zh-CN"), "中文");
+        assert_eq!(lt.resolve("en-US"), "English");
+        // 缺失语言回退 en-US
+        assert_eq!(lt.resolve("ja-JP"), "English");
+    }
+
+    #[test]
+    fn localized_text_first_entry_fallback() {
+        // 无目标语言且无 en-US 时，回退到 JSON 文档中的第一个条目
+        let lt = LocalizedText::Map(vec![
+            ("zh-CN".into(), "中文".into()),
+            ("ja-JP".into(), "日本語".into()),
+        ]);
+        assert_eq!(lt.resolve("fr-FR"), "中文");
+    }
+
+    #[test]
+    fn localized_text_empty_and_missing() {
+        assert_eq!(LocalizedText::Text(String::new()).resolve("zh-CN"), "");
+        assert_eq!(LocalizedText::Map(vec![]).resolve("zh-CN"), "");
+        assert_eq!(LocalizedText::Text("x".into()).resolve("en-US"), "x");
+    }
+
+    #[test]
+    fn localized_text_roundtrip_preserves_shape_and_order() {
+        // 字符串回写为字符串
+        let lt = LocalizedText::Text("abc".into());
+        assert_eq!(serde_json::to_string(&lt).unwrap(), r#""abc""#);
+        // 映射回写为映射且保序
+        let lt = LocalizedText::Map(vec![
+            ("zh-CN".into(), "中文".into()),
+            ("en-US".into(), "English".into()),
+        ]);
+        let json = serde_json::to_string(&lt).unwrap();
+        assert_eq!(json, r#"{"zh-CN":"中文","en-US":"English"}"#);
+        let parsed: LocalizedText = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, lt);
+    }
+
+    #[test]
+    fn manifest_localized_text_preserves_first_locale_through_ipc() {
+        // Tauri IPC may serialize through serde_json::Value. Nested parameter maps
+        // must retain document order too, not just the typed manifest description.
+        let json = r#"{
+            "protocolVersion":"1.0.0", "name":"demo", "version":"1.0.0",
+            "description":{"zh-CN":"插件","ja-JP":"プラグイン"},
+            "author":"t", "entry":"main.py", "runtime":"python",
+            "capabilities":[],
+            "parametersSchema":{
+                "label":{
+                    "type":"string",
+                    "title":{"zh-CN":"标签","ja-JP":"ラベル"},
+                    "description":{"fr-FR":"Description française","de-DE":"Beschreibung"}
+                }
+            }
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        let ipc_value = serde_json::to_value(&manifest).unwrap();
+        for (value, expected) in [
+            (&ipc_value["description"], "插件"),
+            (&ipc_value["parametersSchema"]["label"]["title"], "标签"),
+            (
+                &ipc_value["parametersSchema"]["label"]["description"],
+                "Description française",
+            ),
+        ] {
+            let text: LocalizedText = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(text.resolve("ko-KR"), expected);
+        }
+    }
+
+    #[test]
+    fn manifest_rejects_non_string_map_values() {
+        // 映射值必须是字符串；数字等类型反序列化失败
+        let json = r#"{"protocolVersion":"1.0.0","name":"demo","version":"1.0.0","description":{"en-US":5},"author":"t","entry":"main.py","runtime":"python","capabilities":[]}"#;
+        assert!(serde_json::from_str::<PluginManifest>(json).is_err());
     }
 }

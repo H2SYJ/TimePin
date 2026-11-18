@@ -23,7 +23,7 @@ use crate::formats::Mark;
 use crate::frame_service::{FrameExtractRequest, FrameService};
 use crate::ipc::SCHEMA_VERSION;
 
-use super::manifest::{PluginCapability, PluginManifest, PluginRuntime};
+use super::manifest::{LocalizedText, PluginCapability, PluginManifest, PluginRuntime};
 use super::protocol::{
     LogParams, PluginNotification, PluginResult, ProgressParams, RunParams, RunVideoInfo,
     PROTOCOL_VERSION,
@@ -62,7 +62,8 @@ pub enum PluginError {
 pub struct PluginInfo {
     pub name: String,
     pub version: String,
-    pub description: String,
+    /// 本地化文本（字符串或 locale→string 映射），由前端按 settings.language 解析
+    pub description: LocalizedText,
     pub author: String,
     pub runtime: String,
     pub capabilities: Vec<String>,

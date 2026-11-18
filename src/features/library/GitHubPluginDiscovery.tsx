@@ -2,7 +2,9 @@ import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Download, ExternalL
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Checkbox, Input, Badge } from '@/components/ui';
 import { api } from '@/lib/ipc';
+import { resolveLocalizedText } from '@/lib/localization';
 import { cn } from '@/lib/utils';
+import { useAppStore } from '@/stores/app';
 import type {
   DiscoveredPlugin,
   DiscoverPluginsResult,
@@ -134,6 +136,7 @@ function isOfficialOwner(owner: DiscoveredPlugin['repository']['owner']): boolea
 
 function GitHubPluginCard({ plugin, onInstall, installing, installDisabled, onOpenTokenPanel }: GitHubPluginCardProps) {
   const { repository, manifest, manifestError, isInstalled } = plugin;
+  const language = useAppStore((s) => s.settings.language);
   const isInstalling = installing.has(repository.fullName);
   const [expanded, setExpanded] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
@@ -361,7 +364,7 @@ function GitHubPluginCard({ plugin, onInstall, installing, installDisabled, onOp
                   <div className="mt-1 flex flex-wrap gap-1">
                     {Object.entries(manifest.parametersSchema).map(([key, schema]: [string, any]) => (
                       <Badge key={key} className="border border-primary/40 bg-primary/10 text-primary">
-                        {schema.title || key}
+                        {resolveLocalizedText(schema.title, language) || key}
                       </Badge>
                     ))}
                   </div>
