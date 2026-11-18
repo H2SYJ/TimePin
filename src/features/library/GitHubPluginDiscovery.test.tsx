@@ -363,6 +363,62 @@ describe('GitHub 插件发现', () => {
   });
 });
 
+describe('GitHub 发现页布局回归', () => {
+  it('remember 行局部居中，并抵消 HeroUI 点击区域的不对称上边距', async () => {
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    openTokenPanel();
+
+    const checkbox = screen.getByRole('checkbox', { name: '记住此 token' });
+    const row = checkbox.closest('label')?.parentElement;
+    // jsdom does not calculate layout; real alignment is checked in the browser.
+    expect(row).toHaveClass('items-center', '[&>label]:-mt-2');
+    expect(row).not.toHaveClass('items-start');
+  });
+
+  it.each(['available', 'installed', 'missing-manifest'] as const)(
+    '%s 卡片的操作区独立于长标题，布局行撑满卡片',
+    async (state) => {
+      const plugin = makePlugin(`H2SYJ/${'long-plugin-name-'.repeat(5)}`);
+      plugin.verification = 'verified';
+      if (state === 'installed') plugin.isInstalled = true;
+      if (state === 'missing-manifest') plugin.manifest = null;
+      vi.mocked(api.discoverGitHubPlugins).mockResolvedValue(okResult([plugin]));
+      render(<GitHubPluginDiscovery />);
+      await loaded();
+
+      const expand = screen.getByRole('button', { name: '展开详情' });
+      const actions = expand.parentElement;
+      const row = actions?.parentElement;
+      expect(row).toHaveClass('flex', 'w-full', 'justify-between');
+      expect(row?.children[0]).toHaveClass('min-w-0', 'flex-1');
+      expect(actions).toHaveClass('shrink-0');
+      expect(actions).not.toContainElement(screen.getByRole('heading', { name: plugin.repository.name }));
+      const install = within(actions!).getAllByRole('button')
+        .find((button) => button.textContent === (state === 'installed' ? '已安装' : '安装'));
+      if (state === 'available') expect(install).toBeEnabled();
+      else expect(install).toBeDisabled();
+
+      fireEvent.click(expand);
+      expect(screen.getByRole('button', { name: '收起详情' }).parentElement).toBe(actions);
+      expect(screen.getByRole('button', { name: '查看仓库' })).toBeInTheDocument();
+    },
+  );
+
+  it('Token 行的局部样式不改变安装同意复选框的多行顶部对齐', async () => {
+    render(<GitHubPluginDiscovery />);
+    await loaded();
+    openTokenPanel();
+    const install = screen.getAllByRole('button')
+      .find((button) => button.textContent === '安装');
+    fireEvent.click(install!);
+    const dialog = screen.getByRole('dialog', { name: '安装前风险确认' });
+    const row = within(dialog).getByRole('checkbox').closest('label')?.parentElement;
+    expect(row).toHaveClass('items-start');
+    expect(row).not.toHaveClass('items-center', '[&>label]:-mt-2');
+  });
+});
+
 // confirmInstallation fires the async install flow whose finally block settles
 // installing state + a fire-and-forget session refresh outside act; flush them.
 async function confirmInstallation() {

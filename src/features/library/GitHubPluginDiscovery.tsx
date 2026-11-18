@@ -167,7 +167,7 @@ function GitHubPluginCard({ plugin, onInstall, installing, installDisabled, onOp
   return (
     <Card className="overflow-hidden rounded-2xl border-divider bg-default-50/50">
       <CardHeader className="p-4">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex w-full items-start justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
               <Github className="h-5 w-5" aria-hidden="true" />
@@ -591,11 +591,13 @@ function TokenPanel({ submitting, error, networkDisabled, onSubmit, onCancel, fo
             }
           }}
         />
+        {/* Restore HeroUI's symmetric hit-area margins before centering this compact row. */}
         <Checkbox
           checked={remember}
           onCheckedChange={setRemember}
           isDisabled={submitting}
           aria-label="记住此 token"
+          className="items-center [&>label]:-mt-2"
           labelClassName="text-xs"
         >
           记住此 token（写入系统凭据库）。不勾选时仅保存在内存，退出应用后失效。
