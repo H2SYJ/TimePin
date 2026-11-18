@@ -194,7 +194,10 @@ pub struct DiscoverPluginsResult {
     pub schema_version: &'static str,
     pub plugins: Vec<DiscoveredPlugin>,
     pub total_count: u32,
+    /// Search bucket snapshot, retained for IPC v1 compatibility.
     pub rate_limit: Option<GitHubRateInfo>,
+    /// Latest snapshot of every resource observed by this session/discovery.
+    pub rate_limits: Vec<GitHubRateInfo>,
 }
 
 #[derive(Deserialize)]
@@ -218,7 +221,15 @@ async fn search_repositories(
     client: &GitHubClient,
     page: u32,
     per_page: u32,
-) -> Result<(Vec<RemotePlugin>, u32, Option<GitHubRateInfo>), GitHubApiError> {
+) -> Result<
+    (
+        Vec<RemotePlugin>,
+        u32,
+        Option<GitHubRateInfo>,
+        Vec<GitHubRateInfo>,
+    ),
+    GitHubApiError,
+> {
     let url = api_url(
         &["search", "repositories"],
         &[
@@ -235,6 +246,7 @@ async fn search_repositories(
         search.items.into_iter().map(RemotePlugin::from).collect(),
         search.total_count,
         response.rate_limit,
+        response.rate_limits,
     ))
 }
 
@@ -350,13 +362,28 @@ pub async fn discover_github_plugins(
     .await
 }
 
+fn upsert_rate_snapshot(rates: &mut Vec<GitHubRateInfo>, rate: GitHubRateInfo) {
+    if let Some(existing) = rates
+        .iter_mut()
+        .find(|entry| entry.resource == rate.resource)
+    {
+        *existing = rate;
+    } else {
+        rates.push(rate);
+    }
+}
+
 pub(crate) async fn discover(
     client: &GitHubClient,
     page: u32,
     per_page: u32,
     plugin_dirs: &[PathBuf],
 ) -> Result<DiscoverPluginsResult, GitHubApiError> {
-    let (repos, total_count, mut rate_limit) = search_repositories(client, page, per_page).await?;
+    let (repos, total_count, search_rate, search_rate_limits) =
+        search_repositories(client, page, per_page).await?;
+    // The discovery headline is the *search* bucket: keep the first observed search
+    // snapshot for `rateLimit`, but record every resource snapshot in `rateLimits`.
+    let mut rate_limits: Vec<GitHubRateInfo> = search_rate_limits;
     let mut discovered = Vec::with_capacity(repos.len());
     for repo in repos {
         let manifest_result =
@@ -364,12 +391,16 @@ pub(crate) async fn discover(
                 .await;
         let (manifest, manifest_error, local_path) = match manifest_result {
             Ok((Some(manifest), rate)) => {
-                rate_limit = rate;
+                if let Some(rate) = rate {
+                    upsert_rate_snapshot(&mut rate_limits, rate);
+                }
                 let local = find_local_install(&manifest.name, plugin_dirs);
                 (Some(manifest), None, local)
             }
             Ok((None, rate)) => {
-                rate_limit = rate;
+                if let Some(rate) = rate {
+                    upsert_rate_snapshot(&mut rate_limits, rate);
+                }
                 (None, None, None)
             }
             // A manifest throttle stops discovery immediately; never hide it in one card.
@@ -377,7 +408,9 @@ pub(crate) async fn discover(
                 return Err(error)
             }
             Err(error) => {
-                rate_limit = error.rate_limit.map(|rate| *rate);
+                if let Some(rate) = error.rate_limit {
+                    upsert_rate_snapshot(&mut rate_limits, *rate);
+                }
                 (None, Some(error.message), None)
             }
         };
@@ -398,11 +431,14 @@ pub(crate) async fn discover(
             verification,
         });
     }
+    // Keep `rateLimit` on the *search* bucket for IPC v1 compatibility; `rateLimits`
+    // is the additive per-resource ledger. Manifest (core) responses never replace it.
     Ok(DiscoverPluginsResult {
         schema_version: "1.0.0",
         plugins: discovered,
         total_count,
-        rate_limit,
+        rate_limit: search_rate,
+        rate_limits,
     })
 }
 

@@ -40,13 +40,18 @@
     "session": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "identity", "remembered", "storageWarning", "rateLimit"],
+      "required": ["schemaVersion", "identity", "remembered", "storageWarning", "rateLimit", "rateLimits"],
       "properties": {
         "schemaVersion": { "const": "1.0.0" },
         "identity": { "enum": ["ANONYMOUS", "AUTHENTICATED", "TOKEN_INVALID"] },
         "remembered": { "type": "boolean" },
         "storageWarning": { "type": ["string", "null"] },
-        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" }
+        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" },
+        "rateLimits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rateInfo" },
+          "description": "Per-resource snapshots keyed by GitHubRateInfo.resource (core/search/graphql). Additive in v1.0.0; rateLimit keeps the last observed response's bucket."
+        }
       }
     },
     "owner": {
@@ -91,12 +96,17 @@
     "discovery": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "plugins", "totalCount", "rateLimit"],
+      "required": ["schemaVersion", "plugins", "totalCount", "rateLimit", "rateLimits"],
       "properties": {
         "schemaVersion": { "const": "1.0.0" },
         "plugins": { "type": "array", "items": { "$ref": "#/$defs/discoveredPlugin" } },
         "totalCount": { "type": "integer", "minimum": 0 },
-        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" }
+        "rateLimit": { "$ref": "#/$defs/nullableRateInfo" },
+        "rateLimits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rateInfo" },
+          "description": "Per-resource snapshots collected while discovering. rateLimit reports the search bucket's last observation; manifest reads still populate rateLimits[core]."
+        }
       }
     }
   }
