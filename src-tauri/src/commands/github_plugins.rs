@@ -553,6 +553,7 @@ fn activate_archive(
 pub async fn install_github_plugin(
     app_handle: tauri::AppHandle,
     client: State<'_, GitHubClient>,
+    manager: State<'_, crate::plugins::manager::PluginManager>,
     owner: String,
     repo: String,
     branch: Option<String>,
@@ -588,6 +589,10 @@ pub async fn install_github_plugin(
     })
     .await
     .map_err(|_| GitHubApiError::client("插件安装任务失败"))??;
+    // The archive is on disk now; register it without stopping running plugins
+    // so `get_plugins` reflects the install immediately after this call returns.
+    let plugin_dirs = crate::commands::plugins::plugin_dirs(&app_handle);
+    manager.register_new(&plugin_dirs);
     let _ = app_handle.emit(
         crate::plugins::manager::EVENT_PLUGIN_STATUS,
         serde_json::json!({ "pluginName": plugin_name, "status": "ready", "detail": "installed via GitHub" }),

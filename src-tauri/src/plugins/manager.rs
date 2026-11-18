@@ -209,6 +209,19 @@ impl PluginManager {
         )
     }
 
+    /// 在不停止已有进程的前提下，把新扫描到的插件目录并入注册表。
+    /// 供 GitHub 安装后/目录变更探测使用；已有条目保持原状态与进程。
+    pub fn register_new(&self, plugin_dirs: &[PathBuf]) {
+        let fresh = Self::discover(&self.app, plugin_dirs);
+        let fresh_map = Arc::try_unwrap(fresh.plugins)
+            .map(|m| m.into_inner().expect("fresh map poisoned"))
+            .unwrap_or_default();
+        let mut plugins = self.plugins.lock().expect("plugins mutex poisoned");
+        for (name, plugin) in fresh_map {
+            plugins.entry(name).or_insert(plugin);
+        }
+    }
+
     /// 列出全部插件（含 invalid/crashed 状态）。
     /// `settings` 传入用于查询 Python 环境状态；传 `None` 时该字段为 None。
     pub fn list(&self, settings: Option<&crate::core::settings::Settings>) -> Vec<PluginInfo> {
