@@ -1,5 +1,5 @@
 import {
-  Film,
+  type LucideIcon,
   FolderOpen,
   MapPin,
   Puzzle,
@@ -11,13 +11,13 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 
 type Page = 'library' | 'marks' | 'plugins' | 'settings';
 
-const navigation: Array<{ page: Page; label: string; icon: typeof Film }> = [
+const navigation: Array<{ page: Page; label: string; icon: LucideIcon }> = [
   { page: 'library', label: '视频库', icon: FolderOpen },
   { page: 'marks', label: '标注', icon: MapPin },
   { page: 'plugins', label: '插件', icon: Puzzle },
 ];
 
-const bottomNavigation: Array<{ page: Page; label: string; icon: typeof Film }> = [
+const bottomNavigation: Array<{ page: Page; label: string; icon: LucideIcon }> = [
   { page: 'settings', label: '设置', icon: SettingsIcon },
 ];
 
@@ -27,7 +27,7 @@ function RailButton({
   badge,
   onPress,
 }: {
-  item: { page: Page; label: string; icon: typeof Film };
+  item: { page: Page; label: string; icon: LucideIcon };
   active: boolean;
   badge?: number;
   onPress: () => void;
@@ -66,9 +66,11 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-[72px] shrink-0 flex-col items-center border-r border-divider bg-default-50/50 py-4">
       {/* Logo */}
-      <div className="mb-6 flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-        <Film className="h-5 w-5" aria-hidden="true" />
-      </div>
+      <img
+        src="/logo.png"
+        alt="TimePin"
+        className="mb-6 h-10 w-10 rounded-xl object-cover"
+      />
 
       {/* 主导航 */}
       <nav className="flex flex-col items-center gap-1" aria-label="主导航">
