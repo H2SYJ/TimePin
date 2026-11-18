@@ -398,6 +398,38 @@ mod tests {
     }
 
     #[test]
+    fn manifest_localized_text_preserves_first_locale_through_ipc() {
+        // Tauri IPC may serialize through serde_json::Value. Nested parameter maps
+        // must retain document order too, not just the typed manifest description.
+        let json = r#"{
+            "protocolVersion":"1.0.0", "name":"demo", "version":"1.0.0",
+            "description":{"zh-CN":"插件","ja-JP":"プラグイン"},
+            "author":"t", "entry":"main.py", "runtime":"python",
+            "capabilities":[],
+            "parametersSchema":{
+                "label":{
+                    "type":"string",
+                    "title":{"zh-CN":"标签","ja-JP":"ラベル"},
+                    "description":{"fr-FR":"Description française","de-DE":"Beschreibung"}
+                }
+            }
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        let ipc_value = serde_json::to_value(&manifest).unwrap();
+        for (value, expected) in [
+            (&ipc_value["description"], "插件"),
+            (&ipc_value["parametersSchema"]["label"]["title"], "标签"),
+            (
+                &ipc_value["parametersSchema"]["label"]["description"],
+                "Description française",
+            ),
+        ] {
+            let text: LocalizedText = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(text.resolve("ko-KR"), expected);
+        }
+    }
+
+    #[test]
     fn manifest_rejects_non_string_map_values() {
         // 映射值必须是字符串；数字等类型反序列化失败
         let json = r#"{"protocolVersion":"1.0.0","name":"demo","version":"1.0.0","description":{"en-US":5},"author":"t","entry":"main.py","runtime":"python","capabilities":[]}"#;

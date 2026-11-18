@@ -181,15 +181,16 @@ run 调用      → progress/log 通知 → 返回 PluginResult → ready
 3. 映射中**第一个条目** —— 按 `plugin.json` 文档中的书写顺序
 4. `""` —— 空映射或未定义
 
-Rust 端 `manifest.rs::LocalizedText` 保留 JSON 对象的插入顺序（`Vec<(locale, text)>`），
-保证"第一个条目"回退稳定可测；序列化时字符串仍回写为字符串、映射仍回写为映射。
-映射值必须是字符串，其他类型（数字 / 布尔 / 嵌套对象）在 manifest 解析阶段即被拒绝。
+Rust 端 `manifest.rs::LocalizedText` 保留清单描述的插入顺序（`Vec<(locale, text)>`），
+并启用 `serde_json/preserve_order`，保证参数中的嵌套映射以及 IPC 经过 `serde_json::Value`
+时也不重排语言键。序列化时字符串仍回写为字符串、映射仍回写为映射。
+映射值必须是字符串；清单级 `description` 在反序列化时校验，参数级显示字段由插件作者保证格式。
 前端解析统一走 `src/lib/localization.ts::resolveLocalizedText`，消费点包括
 `PluginsPage`（插件描述 `Section.description`、参数 `Field.label`/`hint`、`Switch.label`）与
 `GitHubPluginDiscovery`（参数徽章 `schema.title`）。
 
 **非目标**：`enum` 值不做本地化（枚举值是程序标识而非显示文案，`default` 值也保持原样）。
-`name`、`entry`、`outputSchema` 等字段仍要求字符串，不参与本地化。
+`name`、`entry` 等身份字段仍要求字符串，`outputSchema` 仍为原有对象格式，均不参与本地化。
 
 ### Python 运行时与依赖
 
