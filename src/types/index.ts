@@ -199,6 +199,16 @@ export interface PluginInfo {
   pythonEnvironment?: PluginEnvStatus | null;
 }
 
+/** 本地插件包导入（IPC v1.0）；路径由 Rust 读取，HTML File 使用纯 base64。 */
+export type PluginImportSource = string | { base64: string; fileName: string };
+
+export interface PluginImportResult {
+  schemaVersion: '1.0';
+  name: string;
+  version: string;
+  replaced: boolean;
+}
+
 /** `plugin://env-progress` 事件的 payload：venv 建置进度 */
 export interface PluginEnvProgress {
   schemaVersion: string;

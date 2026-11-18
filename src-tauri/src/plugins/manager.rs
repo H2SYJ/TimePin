@@ -123,9 +123,41 @@ struct ManagedPlugin {
 pub struct PluginManager {
     app: AppHandle,
     plugins: Arc<Mutex<HashMap<String, Arc<Mutex<ManagedPlugin>>>>>,
+    /// Serializes process admission with stop/switch/rediscovery, not run RPCs.
+    /// Acquire settings (and an install lock if needed) before this lock.
+    lifecycle: Arc<Mutex<()>>,
 }
 
 type SharedPlugin = Arc<Mutex<ManagedPlugin>>;
+
+/// Discovery must preserve live entries, except the one explicitly stopped for
+/// replacement. Dropping another entry here would lose its process/state.
+fn merge_discovered_plugins<T>(
+    plugins: &mut HashMap<String, T>,
+    fresh: HashMap<String, T>,
+    replacement: Option<&str>,
+) {
+    for (name, plugin) in fresh {
+        if replacement == Some(name.as_str()) {
+            plugins.insert(name, plugin);
+        } else {
+            plugins.entry(name).or_insert(plugin);
+        }
+    }
+}
+
+fn install_transition<T, E>(
+    lifecycle: &Mutex<()>,
+    stop: impl FnOnce(),
+    activate: impl FnOnce() -> Result<T, E>,
+    reload: impl FnOnce(),
+) -> Result<T, E> {
+    let _lifecycle = lifecycle.lock().expect("lifecycle mutex poisoned");
+    stop();
+    let result = activate();
+    reload();
+    result
+}
 
 impl PluginManager {
     /// 扫描目录并构建管理器；不会启动任何进程（懒启动）。
@@ -174,6 +206,7 @@ impl PluginManager {
         Self {
             app: app.clone(),
             plugins: Arc::new(Mutex::new(plugins)),
+            lifecycle: Arc::new(Mutex::new(())),
         }
     }
 
@@ -212,14 +245,50 @@ impl PluginManager {
     /// 在不停止已有进程的前提下，把新扫描到的插件目录并入注册表。
     /// 供 GitHub 安装后/目录变更探测使用；已有条目保持原状态与进程。
     pub fn register_new(&self, plugin_dirs: &[PathBuf]) {
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
+        self.register_new_locked(plugin_dirs, None);
+    }
+
+    /// 仅替换指定名称的注册条目并停止其既有进程。
+    /// 用于 GitHub 覆盖安装同一插件：TPIN-18 契约不允许像本地导入那样
+    /// 全局停止其它插件。已按名称存在的条目会在激活失败时恢复原注册状态；
+    /// 激活成功后由 register_new_locked 用新目录覆盖。
+    pub fn install_and_register_new<T, E>(
+        &self,
+        plugin_name: &str,
+        plugin_dirs: &[PathBuf],
+        activate: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        install_transition(
+            &self.lifecycle,
+            || self.stop_locked(plugin_name),
+            activate,
+            || self.register_new_locked(plugin_dirs, Some(plugin_name)),
+        )
+    }
+
+    /// Caller owns lifecycle; waits only for the named plugin's RPC, never other plugins.
+    fn stop_locked(&self, name: &str) {
+        let plugins = self.plugins.lock().expect("plugins mutex poisoned");
+        if let Some(plugin) = plugins.get(name) {
+            let mut p = plugin.lock().expect("plugin mutex poisoned");
+            if let Some(process) = p.process.take() {
+                if let Ok(mut guard) = process.lock() {
+                    guard.shutdown(Duration::from_secs(2));
+                }
+            }
+        }
+    }
+
+    /// Caller owns lifecycle; only the explicitly stopped replacement may be
+    /// overwritten. Other entries keep their state and process.
+    fn register_new_locked(&self, plugin_dirs: &[PathBuf], replacement: Option<&str>) {
         let fresh = Self::discover(&self.app, plugin_dirs);
         let fresh_map = Arc::try_unwrap(fresh.plugins)
             .map(|m| m.into_inner().expect("fresh map poisoned"))
             .unwrap_or_default();
         let mut plugins = self.plugins.lock().expect("plugins mutex poisoned");
-        for (name, plugin) in fresh_map {
-            plugins.entry(name).or_insert(plugin);
-        }
+        merge_discovered_plugins(&mut plugins, fresh_map, replacement);
     }
 
     /// 列出全部插件（含 invalid/crashed 状态）。
@@ -266,7 +335,11 @@ impl PluginManager {
     }
 
     /// 确保插件进程已启动；崩溃后自动重启。
-    fn ensure_process(&self, plugin: &SharedPlugin) -> Result<(), PluginError> {
+    fn ensure_process(
+        &self,
+        plugin: &SharedPlugin,
+        settings: &crate::core::settings::Settings,
+    ) -> Result<(), PluginError> {
         let mut p = plugin.lock().expect("plugin mutex poisoned");
         if p.status == "invalid" {
             return Err(PluginError::Invalid(
@@ -302,13 +375,11 @@ impl PluginManager {
         // Python runtime：先准备解释器（共享或插件 venv），再 spawn。
         // 环境建置失败必须阻断启动并把 pip 输出透传出去——铁律验收。
         let python_interpreter = if p.manifest.runtime == PluginRuntime::Python {
-            let settings = crate::core::settings::load_settings(&self.app)
-                .map_err(|e| PythonEnvError::InterpreterNotFound(format!("读取设置失败：{e}")))?;
             Some(python_env::ensure_python_environment(
                 &p.manifest,
                 &p.dir,
                 &self.app,
-                &settings,
+                settings,
             )?)
         } else {
             None
@@ -335,6 +406,7 @@ impl PluginManager {
 
     /// 停止插件进程（设置变更/插件禁用/应用退出时调用）
     pub fn stop(&self, name: &str) -> Result<(), PluginError> {
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
         let plugin = self.get(name)?;
         let mut p = plugin.lock().expect("plugin mutex poisoned");
         if let Some(process) = p.process.take() {
@@ -352,6 +424,13 @@ impl PluginManager {
 
     /// 停止所有插件进程（应用退出时）
     pub fn stop_all(&self) {
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
+        self.stop_all_locked();
+    }
+
+    /// Caller owns lifecycle; waiting for an existing RPC is intentional. Never
+    /// reacquire settings here: that RPC may call a settings-reading host service.
+    fn stop_all_locked(&self) {
         let plugins = self.plugins.lock().expect("plugins mutex poisoned");
         for plugin in plugins.values() {
             let mut p = plugin.lock().expect("plugin mutex poisoned");
@@ -369,7 +448,28 @@ impl PluginManager {
     /// `reload` 允许前端按钮触发重新发现。
     /// 同时清理「已不存在于任何插件目录」的孤儿 venv。
     pub fn reload(&self, plugin_dirs: &[PathBuf]) {
-        self.stop_all();
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
+        self.stop_all_locked();
+        self.rediscover_locked(plugin_dirs);
+    }
+
+    /// Only call after staging/validation, with settings → install locks held.
+    /// No new launch can slip between stop and switch. Reconcile even on a
+    /// failed switch so the restored install remains runnable.
+    pub fn install_and_reload<T, E>(
+        &self,
+        plugin_dirs: &[PathBuf],
+        activate: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        install_transition(
+            &self.lifecycle,
+            || self.stop_all_locked(),
+            activate,
+            || self.rediscover_locked(plugin_dirs),
+        )
+    }
+
+    fn rediscover_locked(&self, plugin_dirs: &[PathBuf]) {
         let fresh = Self::discover(&self.app, plugin_dirs);
         let fresh_map = Arc::try_unwrap(fresh.plugins)
             .map(|m| m.into_inner().expect("fresh map poisoned"))
@@ -420,6 +520,7 @@ impl PluginManager {
     /// 删除某插件对应的 Python 环境（卸载插件时调用）。
     /// 插件目录可能已不存在——按 manifest+dir 定位 env 目录即可。
     pub fn remove_environment(&self, name: &str) -> Result<(), PluginError> {
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
         let plugin = self.get(name)?;
         let p = plugin.lock().expect("plugin mutex poisoned");
         python_env::remove_plugin_environment(&self.app, &p.manifest, &p.dir)?;
@@ -432,7 +533,8 @@ impl PluginManager {
         &self,
         settings: &crate::core::settings::Settings,
     ) -> Vec<(String, Result<PathBuf, String>)> {
-        self.stop_all();
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
+        self.stop_all_locked();
         let plugins = self.plugins.lock().expect("plugins mutex poisoned");
         let mut results = Vec::new();
         for plugin in plugins.values() {
@@ -458,6 +560,10 @@ impl PluginManager {
         params: serde_json::Value,
         output_dir: PathBuf,
     ) -> Result<(String, PluginResult), PluginError> {
+        let settings_guard = crate::core::settings::settings_lock_guard();
+        let settings = crate::core::settings::load_settings(&self.app)
+            .map_err(|e| PluginError::Task(format!("读取设置失败：{e}")))?;
+        let lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
         let plugin = self.get(name)?;
 
         // 能力校验：FileWrite 需要 output_dir（我们总会提供，但插件若声明
@@ -473,7 +579,7 @@ impl PluginManager {
             }
         }
 
-        self.ensure_process(&plugin)?;
+        self.ensure_process(&plugin, &settings)?;
 
         let task_id = uuid::Uuid::new_v4().to_string();
         let run_params = RunParams {
@@ -492,33 +598,44 @@ impl PluginManager {
         };
 
         let plugin_name = name.to_string();
-        // 取进程 Arc 并标记 running，然后释放锁 — 长 RPC 在锁外执行，
-        // 保证 cancel/stop/reload 在运行期间可达。
+        // Reserve the process RPC mutex while admission is still held: a reload
+        // can wait for this run, but can never replace the map then make a new
+        // launch spawn an orphaned process against a stale entry. RPC completion
+        // requires no lifecycle/settings lock, so shutdown cannot deadlock.
         let process_arc = {
             let mut p = plugin.lock().expect("plugin mutex poisoned");
             p.state = ProcessState::Running;
             self.emit_status(&plugin_name, "running", None);
             p.process.clone()
         };
+        let process =
+            process_arc.ok_or_else(|| PluginProcessError::SpawnFailed("进程未启动".to_string()))?;
+        let mut process_guard = process.lock().expect("process mutex poisoned");
+        drop(lifecycle);
+        drop(settings_guard);
+
         // 构建 run 生命周期内的宿主反向服务处理器（frames.extract）。
         // 只在 frame_service 实现存在时注入；当前 FrameService 由子代理并行开发，
         // 若模块尚未就位则以 `cfg` 软连接，避免阻塞主代码编译。
         let video_path = video.path.clone();
         let host_handler = self.build_host_service_handler(video_path, output_dir.clone());
+        // 长 RPC 在生命周期/设置锁外执行，保证 cancel/stop/reload 在运行期间可达。
+        let result = process_guard.run_with_host_services(
+            serde_json::to_value(&run_params).map_err(|e| PluginError::Task(e.to_string()))?,
+            None,
+            Some(host_handler),
+        );
+        drop(process_guard);
 
-        let result = match process_arc {
-            Some(process) => {
-                let mut guard = process.lock().expect("process mutex poisoned");
-                guard.run_with_host_services(
-                    serde_json::to_value(&run_params)
-                        .map_err(|e| PluginError::Task(e.to_string()))?,
-                    None,
-                    Some(host_handler),
-                )
-            }
-            None => Err(PluginProcessError::SpawnFailed("进程未启动".to_string())),
-        };
-
+        // A reload may have completed while the RPC was finishing. Do not emit
+        // stale status for an entry that is no longer in the manager.
+        let _lifecycle = self.lifecycle.lock().expect("lifecycle mutex poisoned");
+        if !self
+            .get(name)
+            .is_ok_and(|current| Arc::ptr_eq(&current, &plugin))
+        {
+            return result.map(|r| (task_id, r)).map_err(PluginError::from);
+        }
         let mut p = plugin.lock().expect("plugin mutex poisoned");
         match &result {
             Ok(_) => {
@@ -713,6 +830,151 @@ fn merge_plugin_dirs(
 #[cfg(test)]
 mod directory_tests {
     use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn installation_holds_admission_through_reload_even_on_switch_failure() {
+        for succeeds in [true, false] {
+            let lifecycle = Mutex::new(());
+            let events = Mutex::new(Vec::new());
+            let result = install_transition(
+                &lifecycle,
+                || {
+                    assert!(lifecycle.try_lock().is_err());
+                    events.lock().unwrap().push("stop");
+                },
+                || {
+                    assert!(lifecycle.try_lock().is_err());
+                    events.lock().unwrap().push("switch");
+                    if succeeds {
+                        Ok(())
+                    } else {
+                        Err("switch failed")
+                    }
+                },
+                || {
+                    assert!(lifecycle.try_lock().is_err());
+                    events.lock().unwrap().push("reload");
+                },
+            );
+            assert_eq!(result.is_ok(), succeeds);
+            assert_eq!(*events.lock().unwrap(), ["stop", "switch", "reload"]);
+            assert!(lifecycle.try_lock().is_ok());
+        }
+    }
+
+    #[test]
+    fn launch_waits_for_stop_switch_reload_but_existing_rpc_can_finish() {
+        let lifecycle = Mutex::new(());
+        let process_rpc = Mutex::new(());
+        let version = Mutex::new("old");
+        let (stopping_tx, stopping_rx) = mpsc::channel();
+        let (launching_tx, launching_rx) = mpsc::channel();
+        let (launched_tx, launched_rx) = mpsc::channel();
+        // Model an admitted run: release lifecycle before the long RPC.
+        let admission = lifecycle.lock().unwrap();
+        let running_rpc = process_rpc.lock().unwrap();
+        drop(admission);
+        assert!(lifecycle.try_lock().is_ok());
+        std::thread::scope(|scope| {
+            let installer = scope.spawn(|| {
+                install_transition(
+                    &lifecycle,
+                    || {
+                        stopping_tx.send(()).unwrap();
+                        // The real stop also waits for the process RPC lock.
+                        let _rpc = process_rpc.lock().unwrap();
+                    },
+                    || {
+                        *version.lock().unwrap() = "switched";
+                        Ok::<_, ()>(())
+                    },
+                    || *version.lock().unwrap() = "reloaded",
+                )
+                .unwrap();
+            });
+            stopping_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let launcher = scope.spawn(|| {
+                launching_tx.send(()).unwrap();
+                let _admission = lifecycle.lock().unwrap();
+                launched_tx.send(*version.lock().unwrap()).unwrap();
+            });
+            launching_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(launched_rx.try_recv().is_err());
+            // Finishing the RPC never needs lifecycle/settings, avoiding deadlock.
+            drop(running_rpc);
+            installer.join().unwrap();
+            launcher.join().unwrap();
+            assert_eq!(launched_rx.recv().unwrap(), "reloaded");
+        });
+    }
+
+    /// Models `install_and_register_new`: the stop step must target only the
+    /// named plugin's process lock (never other plugins) and the reload step
+    /// must merge the fresh entry under the same name without clearing the map.
+    /// TPIN-18 forbids the global stop_all/rediscover path on GitHub installs.
+    #[test]
+    fn github_transition_stops_only_target_plugin_and_merges_fresh_entry() {
+        let lifecycle = Mutex::new(());
+        // One lock per running plugin process; `other` stays held to prove the
+        // transition never waits on it.
+        let target_rpc = Mutex::new(());
+        let other_rpc = Mutex::new(());
+        let stopped = Mutex::new(Vec::new());
+        let other_guard = other_rpc.lock().unwrap();
+        let result = install_transition(
+            &lifecycle,
+            || {
+                // Mirror stop_locked("target"): touch only target_rpc. If the
+                // implementation ever reached for other_rpc this would deadlock,
+                // and the timed assert below would fail the test.
+                let _target = target_rpc.lock().unwrap();
+                stopped.lock().unwrap().push("target");
+            },
+            || Ok::<_, &str>("switched"),
+            || {
+                // Mirror register_new_locked: insert/overwrite by name only.
+                stopped.lock().unwrap().push("register");
+            },
+        );
+        assert_eq!(result.unwrap(), "switched");
+        assert_eq!(*stopped.lock().unwrap(), ["target", "register"]);
+        drop(other_guard);
+    }
+
+    #[test]
+    fn discovery_preserves_live_entries_and_replaces_only_the_stopped_target() {
+        for replacement in [None, Some("target")] {
+            let target = Arc::new("old-target");
+            let other = Arc::new("running-other");
+            let fresh_target = Arc::new("new-target");
+            let fresh_other = Arc::new("idle-other");
+            let fresh_new = Arc::new("new-plugin");
+            let mut registry = HashMap::from([
+                ("target".to_string(), target.clone()),
+                ("other".to_string(), other.clone()),
+            ]);
+            merge_discovered_plugins(
+                &mut registry,
+                HashMap::from([
+                    ("target".to_string(), fresh_target.clone()),
+                    ("other".to_string(), fresh_other),
+                    ("new".to_string(), fresh_new.clone()),
+                ]),
+                replacement,
+            );
+            assert!(Arc::ptr_eq(&registry["other"], &other));
+            assert!(Arc::ptr_eq(&registry["new"], &fresh_new));
+            assert!(Arc::ptr_eq(
+                &registry["target"],
+                if replacement.is_some() {
+                    &fresh_target
+                } else {
+                    &target
+                },
+            ));
+        }
+    }
 
     #[test]
     fn keeps_builtin_and_default_roots_with_multiple_custom_directories() {
