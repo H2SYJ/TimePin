@@ -7,6 +7,10 @@ use serde::Serialize;
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
+pub mod manifest_cache;
+use manifest_cache::{identity_fingerprint, manifest_key, ManifestEntry, ManifestHit};
+pub use manifest_cache::{ManifestStore, TauriStoreBackend};
+
 const SCHEMA_VERSION: &str = "1.0.0";
 const USER_AGENT: &str = concat!("TimePin/", env!("CARGO_PKG_VERSION"));
 const SECONDARY_MIN_MS: i64 = 60_000;
@@ -235,22 +239,25 @@ impl Request {
             validators: Validators::default(),
         }
     }
-    fn cache_key(&self, epoch: u64) -> CacheKey {
+    fn cache_key(&self, fingerprint: &str) -> CacheKey {
         CacheKey {
             url: self.url.as_str().to_owned(),
             accept: self.accept.to_owned(),
             api_version: self.api_version.to_owned(),
-            epoch,
+            fingerprint: fingerprint.to_owned(),
         }
     }
 }
 
+/// In-memory entries are namespaced by the identity fingerprint, not a session
+/// epoch: token A -> B -> A lands back on A's bucket, and identity switches never
+/// need to clear this map. The persistent manifest store uses the same fingerprint.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheKey {
     url: String,
     accept: String,
     api_version: String,
-    epoch: u64,
+    fingerprint: String,
 }
 struct CacheEntry {
     body: Vec<u8>,
@@ -273,10 +280,6 @@ impl ResponseCache {
             bytes: 0,
             sequence: 0,
         }
-    }
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.bytes = 0;
     }
     fn remove(&mut self, key: &CacheKey) {
         if let Some(entry) = self.entries.remove(key) {
@@ -380,12 +383,21 @@ trait Transport: Send + Sync {
 struct HttpTransport(reqwest::Client);
 impl HttpTransport {
     fn prepare(&self, request: Request) -> Result<reqwest::Request, GitHubApiError> {
-        if (!request.validators.is_empty() && request.token.is_none())
-            || ((!request.validators.is_empty() || request.token.is_some())
-                && !is_api_url(&request.url))
+        // Credentials and cache validators may only ever travel to api.github.com.
+        if (request.token.is_some() || !request.validators.is_empty()) && !is_api_url(&request.url)
         {
             return Err(GitHubApiError::client(
-                "拒绝向非认证 GitHub API 请求发送凭据或缓存校验头",
+                "拒绝向非 GitHub API 地址发送凭据或缓存校验头",
+            ));
+        }
+        // Anonymous conditional headers are limited to the exact plugin manifest
+        // path — no validator ever leaves for /user, /search, archives or codeload.
+        if request.token.is_none()
+            && !request.validators.is_empty()
+            && manifest_target(&request.url).is_none()
+        {
+            return Err(GitHubApiError::client(
+                "拒绝向非认证 GitHub API 请求发送缓存校验头",
             ));
         }
         let mut builder = self
@@ -616,7 +628,6 @@ struct SessionState {
     rate_limits: BTreeMap<String, GitHubRateInfo>,
     gate: Gate,
     search: SearchBudget,
-    identity_epoch: u64,
     cache: ResponseCache,
 }
 impl SessionState {
@@ -631,8 +642,9 @@ impl SessionState {
         }
     }
     fn change_identity(&mut self) {
-        self.identity_epoch = self.identity_epoch.wrapping_add(1);
-        self.cache.clear();
+        // Rate ledgers and pacing reset; cache buckets stay — they are keyed by
+        // identity fingerprint, so switching back reuses this identity's entries
+        // while a different identity can never read them.
         self.gate.primary_until.clear();
         self.search = SearchBudget::default();
         self.rate_limit = None;
@@ -692,6 +704,7 @@ pub struct GitHubClient {
     credentials: Arc<dyn CredentialStore>,
     clock: Arc<dyn Clock>,
     state: Mutex<SessionState>,
+    manifest_store: Option<Arc<dyn ManifestStore>>,
 }
 
 /// Response carries its own resource snapshot, never an unrelated last response's quota.
@@ -788,10 +801,20 @@ impl GitHubClient {
                 rate_limits: BTreeMap::new(),
                 gate: Gate::default(),
                 search: SearchBudget::default(),
-                identity_epoch: 0,
                 cache: ResponseCache::new(config),
             }),
+            manifest_store: None,
         }
+    }
+
+    /// Attach the persistent plugin manifest cache (TPIN-26). Build the backend
+    /// first — e.g. `TauriStoreBackend::open(app.handle(), manifest_cache::system_now_ms())`
+    /// — then `GitHubClient::new()?.with_manifest_store(Arc::new(backend))`. A backend
+    /// that failed to open is simply not attached; the client keeps working without
+    /// persistence.
+    pub fn with_manifest_store(mut self, store: Arc<dyn ManifestStore>) -> Self {
+        self.manifest_store = Some(store);
+        self
     }
 
     pub async fn session(&self) -> GitHubSession {
@@ -888,6 +911,136 @@ impl GitHubClient {
         self.get(url, false).await
     }
 
+    /// Fetch a plugin.json manifest through the persistent cache (TPIN-26).
+    ///
+    /// Fresh entries are answered *before* admission — a cache hit must not be
+    /// blocked by a rate gate guarding requests that are never sent. Stale entries
+    /// still pass admission, then revalidate with If-None-Match / If-Modified-Since,
+    /// including for anonymous callers (validators are restricted to the exact
+    /// manifest path by [`HttpTransport::prepare`]). The caller's synchronous
+    /// validator runs under the session lock before any cache hit or write: an
+    /// invalid envelope/manifest is never persisted, even during an identity switch.
+    /// Without a store this behaves like [`GitHubClient::public_get`].
+    pub async fn public_manifest_get(
+        &self,
+        url: Url,
+        validate: impl Fn(&[u8]) -> bool,
+    ) -> Result<GitHubResponse, GitHubApiError> {
+        let Some((owner, repo, branch)) = manifest_target(&url) else {
+            return Err(GitHubApiError::client(
+                "manifest 缓存仅支持 GitHub 仓库 plugin.json 接口",
+            ));
+        };
+        let Some(store) = self.manifest_store.clone() else {
+            return self.public_get(url).await;
+        };
+        let mut state = self.state.lock().await;
+        // The lock is held across identity lookup, cache reads, the request and all
+        // writes: no other request may interleave and split this sequence.
+        let mut anonymous_fallback_used = false;
+        loop {
+            let fingerprint = identity_fingerprint(state.token.as_deref());
+            let key = manifest_key(&fingerprint, &owner, &repo, &branch);
+            let now = self.clock.now_ms();
+            let stale = match manifest_cache::manifest_lookup(store.as_ref(), &key, now) {
+                Some(ManifestHit::Fresh(body)) if validate(&body) => {
+                    return Ok(GitHubResponse {
+                        body,
+                        // Only this process's observed ledger is returned. Persisted
+                        // data contains no quota snapshots and cannot refresh them.
+                        rate_limit: state.rate_limits.get(resource::CORE).cloned(),
+                        rate_limits: state.rate_limits.values().cloned().collect(),
+                    });
+                }
+                Some(ManifestHit::Stale(entry)) if validate(&entry.body) => Some(entry),
+                Some(_) => {
+                    log::warn!("GitHub manifest cache: dropping invalid cached response");
+                    store.delete(&key);
+                    None
+                }
+                None => None,
+            };
+            // Admission happens only when the request actually hits the network.
+            let inferred = infer_resource(&url);
+            state.admit(inferred, now)?;
+            let mut request = Request::new(url.clone(), state.token.clone());
+            if let Some(entry) = &stale {
+                // No ETag means an unconditional refresh, even when a last-modified
+                // value exists. Conditional manifest requests always carry an ETag.
+                if entry.etag.is_some() {
+                    request.validators = Validators {
+                        etag: entry.etag.clone(),
+                        last_modified: entry.last_modified.clone(),
+                    };
+                }
+            }
+            let conditional = !request.validators.is_empty();
+            let response = self.transport.send(request).await?;
+            let now = self.clock.now_ms();
+            let rate =
+                rate_info(&response.headers, now).map(|rate| state.observe_rate(rate, inferred));
+            if response.status == StatusCode::UNAUTHORIZED
+                && state.token.is_some()
+                && !anonymous_fallback_used
+            {
+                anonymous_fallback_used = true;
+                self.revoke(&mut state, Identity::TokenInvalid);
+                // Never silently reuse another identity's bucket: the loop restarts,
+                // recomputes the anonymous fingerprint and re-checks the anonymous
+                // cache BEFORE any fallback network traffic.
+                continue;
+            }
+            if let Some(mut error) = classify(&response, now) {
+                if let Some(rate) = rate {
+                    error.rate_limit = Some(Box::new(rate));
+                }
+                state.gate.observe(&mut error, now, inferred);
+                return Err(error);
+            }
+            state.gate.success(rate.as_ref(), now);
+            if let Some(rate) = &rate {
+                state.gate.observe_exhausted(rate, now);
+            }
+            if response.status == StatusCode::NOT_MODIFIED {
+                if !conditional {
+                    return Err(GitHubApiError::client(
+                        "收到 304，但当前请求未携带缓存校验信息",
+                    ));
+                }
+                let Some(entry) = stale else {
+                    return Err(GitHubApiError::client(
+                        "收到 304，但本地缓存中没有对应的可用条目",
+                    ));
+                };
+                let renewed = entry.renewed(&response.headers, now);
+                manifest_cache::manifest_put(store.as_ref(), &key, &renewed);
+                return Ok(GitHubResponse {
+                    body: renewed.body,
+                    rate_limit: rate.or_else(|| state.rate_limits.get(inferred).cloned()),
+                    rate_limits: state.rate_limits.values().cloned().collect(),
+                });
+            }
+            // Validate BEFORE persisting, under the same identity lock. The caller
+            // still receives the original body and produces its existing parse error;
+            // an invalid 200 cannot remain on disk or race with another identity.
+            if response.status == StatusCode::OK {
+                if response.body.len() <= manifest_cache::MAX_MANIFEST_BYTES
+                    && validate(&response.body)
+                {
+                    let entry = ManifestEntry::new(&response.body, &response.headers, now);
+                    manifest_cache::manifest_put(store.as_ref(), &key, &entry);
+                } else {
+                    store.delete(&key);
+                }
+            }
+            return Ok(GitHubResponse {
+                body: response.body,
+                rate_limit: rate.or_else(|| state.rate_limits.get(inferred).cloned()),
+                rate_limits: state.rate_limits.values().cloned().collect(),
+            });
+        }
+    }
+
     pub async fn public_zip(&self, url: Url) -> Result<GitHubResponse, GitHubApiError> {
         self.get(url, true).await
     }
@@ -912,7 +1065,8 @@ impl GitHubClient {
                 next_url.clone(),
                 if codeload { None } else { state.token.clone() },
             );
-            let cache_key = authenticated.then(|| request.cache_key(state.identity_epoch));
+            let cache_key = authenticated
+                .then(|| request.cache_key(&identity_fingerprint(state.token.as_deref())));
             if let Some(key) = cache_key.as_ref() {
                 // Live entries supply validators for the conditional revalidation.
                 if let Some(validators) = state
@@ -1055,6 +1209,34 @@ fn clean_https_host(url: &Url, host: &str) -> bool {
 }
 fn is_api_url(url: &Url) -> bool {
     clean_https_host(url, "api.github.com")
+}
+/// The exact shape anonymous validators are ever allowed on, and the bucket a
+/// manifest URL maps to: `api.github.com/repos/{o}/{r}/contents/plugin.json?ref=<b>`
+/// with `ref` as the ONLY query parameter.
+fn manifest_target(url: &Url) -> Option<(String, String, String)> {
+    if !is_api_url(url) {
+        return None;
+    }
+    let segments: Vec<&str> = url.path_segments()?.collect();
+    let ["repos", owner, repo, "contents", "plugin.json"] = segments[..] else {
+        return None;
+    };
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    let params: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let branch = match params[..] {
+        [(ref key, ref value)] if key == "ref" => value.clone(),
+        [] => "HEAD".to_owned(),
+        _ => return None,
+    };
+    if branch.is_empty() {
+        return None;
+    }
+    Some((owner.to_owned(), repo.to_owned(), branch))
 }
 fn is_safe_codeload(url: &Url) -> bool {
     clean_https_host(url, "codeload.github.com") && url.query().is_none()

@@ -4,6 +4,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             #[cfg(desktop)]
             {
@@ -14,7 +15,19 @@ pub fn run() {
 
             crate::core::init(app.handle())?;
             // The sole GitHub session owns credentials and serializes all API admission.
-            app.manage(crate::core::github::GitHubClient::new()?);
+            // Persistence is an optimization: a cache failure must not prevent startup.
+            let github = crate::core::github::GitHubClient::new()?;
+            let github = match crate::core::github::manifest_cache::TauriStoreBackend::open(
+                app.handle(),
+                crate::core::github::manifest_cache::system_now_ms(),
+            ) {
+                Ok(store) => github.with_manifest_store(std::sync::Arc::new(store)),
+                Err(_) => {
+                    log::warn!("GitHub manifest cache unavailable; using network requests");
+                    github
+                }
+            };
+            app.manage(github);
 
             // Discover bundled, app-owned and saved custom roots without starting processes.
             let custom_dirs = crate::core::settings::load_settings(app.handle())

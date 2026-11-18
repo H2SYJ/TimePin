@@ -1130,7 +1130,7 @@ async fn stale_or_missing_cache_entry_makes_304_an_error() {
     assert_eq!(error.code, ErrorCode::ClientError);
     let requests = transport.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
-    // New epoch: no stale ETag from the previous identity is sent.
+    // New identity fingerprint: no stale ETag from the previous identity is sent.
     assert!(requests[2].validators.is_empty());
 }
 
@@ -1488,7 +1488,7 @@ async fn identity_change_clears_cache_and_search_budget_but_keeps_global_gates()
     assert!(result.is_ok() || result.unwrap_err().code == ErrorCode::NetworkError);
     // The search request fired (not blocked by a stale anonymous budget).
     assert_eq!(transport.requests.lock().unwrap().len(), 3);
-    // Cached etag entry from the old identity is not reused (epoch changed).
+    // Cached etag entry from the old identity is not reused (fingerprint changed).
     let requests = transport.requests.lock().unwrap();
     assert_eq!(requests[2].validators.etag, None);
 }
@@ -1543,7 +1543,8 @@ async fn resubmitting_same_token_keeps_epoch_cache_and_search_budget() {
     let wait = client.public_get(endpoint()).await.unwrap_err();
     assert_eq!(wait.code, ErrorCode::RateWait);
     assert_eq!(wait.retry_at, Some(1_002_000));
-    assert_eq!(client.state.lock().await.identity_epoch, 0);
+    // Re-submitting the same token keeps the same fingerprint: the cached entry
+    // below is still reachable instead of being cleared on re-authentication.
     assert_eq!(client.public_get(url).await.unwrap().body, b"cached");
     let requests = transport.requests.lock().unwrap();
     assert_eq!(requests.len(), 4);
@@ -1633,23 +1634,24 @@ async fn missing_resource_in_manifest_errors_keeps_one_latest_core_snapshot() {
 }
 
 #[test]
-fn cache_keys_include_url_accept_version_and_epoch() {
+fn cache_keys_include_url_accept_version_and_fingerprint() {
     let url = api_url(&["repos", "a", "b"], &[("ref", "main")]).unwrap();
     let mut request = Request::new(url, Some("secret".into()));
-    let original = request.cache_key(1);
-    assert!(original != request.cache_key(2));
+    let original = request.cache_key("pat:aaaaaaaaaaaaaaaa");
+    assert!(original != request.cache_key("anon"));
+    assert!(original != request.cache_key("pat:bbbbbbbbbbbbbbbb"));
     request.accept = "application/vnd.github.raw+json";
-    assert!(original != request.cache_key(1));
+    assert!(original != request.cache_key("pat:aaaaaaaaaaaaaaaa"));
     request.accept = ACCEPT;
     request.api_version = "2099-01-01";
-    assert!(original != request.cache_key(1));
+    assert!(original != request.cache_key("pat:aaaaaaaaaaaaaaaa"));
     request.api_version = API_VERSION;
     request.url.set_query(Some("ref=dev"));
-    assert!(original != request.cache_key(1));
+    assert!(original != request.cache_key("pat:aaaaaaaaaaaaaaaa"));
 }
 
 #[test]
-fn conditional_headers_are_built_only_for_authenticated_api_requests() {
+fn conditional_headers_are_built_for_api_requests_and_anonymous_manifests_only() {
     let transport = HttpTransport(reqwest::Client::new());
     let validators = Validators {
         etag: Some("\"v1\"".into()),
@@ -1665,8 +1667,38 @@ fn conditional_headers_are_built_only_for_authenticated_api_requests() {
     );
     assert_eq!(request.headers()["accept"], ACCEPT);
     assert_eq!(request.headers()["x-github-api-version"], API_VERSION);
+    // TPIN-26: anonymous conditional headers are allowed ONLY on the exact
+    // plugin manifest path.
+    let manifest = api_url(
+        &["repos", "o", "r", "contents", "plugin.json"],
+        &[("ref", "main")],
+    )
+    .unwrap();
+    let mut request = Request::new(manifest, None);
+    request.validators = validators.clone();
+    let request = transport.prepare(request).unwrap();
+    assert_eq!(request.headers()["if-none-match"], "\"v1\"");
+    // Rejected: anonymous validators everywhere else, any token or validator off
+    // the API host.
     for (url, token) in [
         (endpoint(), None),
+        (api_url(&["user"], &[]).unwrap(), None),
+        (
+            api_url(
+                &["repos", "o", "r", "contents", "README.md"],
+                &[("ref", "m")],
+            )
+            .unwrap(),
+            None,
+        ),
+        (
+            api_url(
+                &["repos", "o", "r", "contents", "plugin.json", "extra"],
+                &[("ref", "m")],
+            )
+            .unwrap(),
+            None,
+        ),
         (
             Url::parse("https://codeload.github.com/o/r/zip/main").unwrap(),
             None,
@@ -1824,4 +1856,574 @@ async fn direct_zip_uses_shared_cache_but_redirect_final_body_is_not_cached() {
     }
     // codeload bytes and validators were never associated with the API URL.
     assert_ne!(requests[4].validators.etag.as_deref(), Some("\"codeload\""));
+}
+
+// ---------- TPIN-26: persistent manifest cache ----------
+
+use manifest_cache::memory::MemoryBackend;
+use manifest_cache::{
+    identity_fingerprint, manifest_key, manifest_lookup, manifest_put, prune_expired,
+    ManifestEntry, ManifestHit, FRESH_TTL_MS, HARD_TTL_MS, MANIFEST_KEY_PREFIX, MAX_MANIFEST_BYTES,
+    MAX_MANIFEST_ENTRIES,
+};
+
+fn manifest_url(owner: &str, repo: &str, branch: &str) -> Url {
+    api_url(
+        &["repos", owner, repo, "contents", "plugin.json"],
+        &[("ref", branch)],
+    )
+    .unwrap()
+}
+
+fn manifest_client(
+    responses: Vec<Response>,
+    token: Option<&str>,
+) -> (
+    GitHubClient,
+    Arc<MockTransport>,
+    Arc<MemoryCredentials>,
+    Arc<ManualClock>,
+    Arc<MemoryBackend>,
+) {
+    let clock = Arc::new(ManualClock::new(1_000_000));
+    let ((client, transport, credentials), clock) =
+        fixture_with(responses, token, Some(clock), None);
+    let store = Arc::new(MemoryBackend::default());
+    let client = client.with_manifest_store(store.clone());
+    (client, transport, credentials, clock, store)
+}
+
+fn seed_entry(store: &MemoryBackend, key: &str, body: &str, etag: Option<&str>, now: i64) {
+    let mut headers = HeaderMap::new();
+    if let Some(tag) = etag {
+        headers.insert(reqwest::header::ETAG, tag.parse().unwrap());
+    }
+    store.set(key, &ManifestEntry::new(body.as_bytes(), &headers, now));
+}
+
+#[test]
+fn fingerprint_is_stable_lowercase_sha256_prefix_and_never_the_token() {
+    let anon = identity_fingerprint(None);
+    assert_eq!(anon, "anon");
+    let a = identity_fingerprint(Some("ghp_secret-token-aaaa"));
+    let b = identity_fingerprint(Some("ghp_other-token-bbbb"));
+    assert!(a.starts_with("pat:"));
+    assert_eq!(a.len(), "pat:".len() + 16);
+    assert!(a
+        .chars()
+        .skip(4)
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert_ne!(a, b);
+    // Same token always produces the same fingerprint; the token itself never appears.
+    assert_eq!(a, identity_fingerprint(Some("ghp_secret-token-aaaa")));
+    assert!(!a.contains("secret"));
+    assert!(!a.contains("ghp"));
+}
+
+#[test]
+fn manifest_keys_escape_branch_segments_and_never_collide() {
+    let fp = "anon";
+    let plain = manifest_key(fp, "o", "r", "main");
+    assert!(plain.starts_with(MANIFEST_KEY_PREFIX));
+    assert_eq!(plain, "manifest:v1:anon:o:r:main");
+    // Branch separators can never merge distinct triples into one key.
+    let a = manifest_key(fp, "o", "r", "feat/x");
+    let b = manifest_key(fp, "o", "r:feat", "x");
+    assert_ne!(a, b);
+    let c = manifest_key(fp, "o", "r", "a:b");
+    let d = manifest_key(fp, "o", "r:a", "b");
+    assert_ne!(c, d);
+    assert!(manifest_key(fp, "o", "r", "a b").contains("a%20b"));
+    assert!(manifest_key(fp, "o", "r", "a%b").contains("a%25b"));
+    assert!(manifest_key(fp, "o", "r", "weird/branch:名").contains("%"));
+}
+
+#[tokio::test]
+async fn fresh_manifest_is_served_without_network_or_admission() {
+    // Core gate is closed by an exhausted bucket, yet a fresh manifest still
+    // answers from cache: the request never reaches admission or the wire.
+    let reset = "100000"; // epoch seconds: 1e8 ms, far past every advance below
+    let (client, transport, _, clock, store) = manifest_client(
+        vec![response(
+            200,
+            &[
+                ("etag", "\"v1\""),
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-reset", reset),
+                ("x-ratelimit-resource", "core"),
+            ],
+            "manifest-body",
+        )],
+        Some("secret"),
+    );
+    let url = manifest_url("o", "r", "main");
+    assert_eq!(
+        client
+            .public_manifest_get(url.clone(), |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"manifest-body"
+    );
+    // The bucket is now exhausted AND the entry is still fresh (1 h).
+    clock.advance(FRESH_TTL_MS - 1);
+    let cached = client.public_manifest_get(url, |_| true).await.unwrap();
+    assert_eq!(cached.body, b"manifest-body");
+    // Exactly one request was ever sent — the fresh hit bypassed the closed gate.
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    let key = manifest_key(&identity_fingerprint(Some("secret")), "o", "r", "main");
+    assert!(store.values.lock().unwrap().contains_key(&key));
+}
+
+#[tokio::test]
+async fn stale_manifest_revalidates_with_if_none_match_and_304_renews_both_ttls() {
+    let (client, transport, _, clock, store) = manifest_client(
+        vec![
+            response(
+                200,
+                &[
+                    ("etag", "\"v1\""),
+                    ("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT"),
+                ],
+                "v1-body",
+            ),
+            response(304, &[], ""), // no etag echoed: renew retains the stored one
+            response(304, &[("etag", "\"v2\"")], ""),
+        ],
+        Some("secret"),
+    );
+    let url = manifest_url("o", "r", "main");
+    client
+        .public_manifest_get(url.clone(), |_| true)
+        .await
+        .unwrap();
+    // Past the fresh TTL, inside the hard TTL: conditional revalidation.
+    clock.advance(FRESH_TTL_MS + 1);
+    assert_eq!(
+        client
+            .public_manifest_get(url.clone(), |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"v1-body"
+    );
+    {
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].validators.etag.as_deref(), Some("\"v1\""));
+        assert_eq!(
+            requests[1].validators.last_modified.as_deref(),
+            Some("Wed, 21 Oct 2015 07:28:00 GMT")
+        );
+    }
+    // The 304 renewed BOTH TTLs and kept the omitted etag — verify retention in
+    // the stored bucket BEFORE the next renewal overwrites it.
+    let key = manifest_key(&identity_fingerprint(Some("secret")), "o", "r", "main");
+    let entry: ManifestEntry =
+        serde_json::from_value(store.values.lock().unwrap().get(&key).unwrap().clone()).unwrap();
+    assert_eq!(entry.etag.as_deref(), Some("\"v1\""));
+    assert_eq!(entry.fresh_until, clock.now_ms() + FRESH_TTL_MS);
+    assert_eq!(entry.expires_at, clock.now_ms() + HARD_TTL_MS);
+    // Advancing just past another fresh window revalidates with the RETAINED v1
+    // etag; the answering 304 then upgrades the stored etag to v2.
+    clock.advance(FRESH_TTL_MS + 1);
+    client.public_manifest_get(url, |_| true).await.unwrap();
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[2].validators.etag.as_deref(), Some("\"v1\""));
+    let entry: ManifestEntry =
+        serde_json::from_value(store.values.lock().unwrap().get(&key).unwrap().clone()).unwrap();
+    assert_eq!(entry.etag.as_deref(), Some("\"v2\""));
+}
+
+#[tokio::test]
+async fn stale_manifest_200_replaces_body_and_anonymous_sends_if_none_match() {
+    let (client, transport, _, clock, _) = manifest_client(
+        vec![
+            response(200, &[("etag", "\"a\"")], "anon-v1"),
+            response(200, &[("etag", "\"b\"")], "anon-v2"),
+        ],
+        None, // anonymous: validators only ever leave on the manifest path
+    );
+    let url = manifest_url("o", "r", "main");
+    client
+        .public_manifest_get(url.clone(), |_| true)
+        .await
+        .unwrap();
+    clock.advance(FRESH_TTL_MS + 1);
+    assert_eq!(
+        client
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"anon-v2"
+    );
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    // Anonymous revalidation carries If-None-Match and no credentials.
+    assert!(requests[1].token.is_none());
+    assert_eq!(requests[1].validators.etag.as_deref(), Some("\"a\""));
+}
+
+#[tokio::test]
+async fn manifest_without_etag_revalidates_unconditionally() {
+    let (client, transport, _, clock, _) = manifest_client(
+        vec![response(200, &[], "plain-1"), response(200, &[], "plain-2")],
+        None,
+    );
+    let url = manifest_url("o", "r", "main");
+    client
+        .public_manifest_get(url.clone(), |_| true)
+        .await
+        .unwrap();
+    clock.advance(FRESH_TTL_MS + 1);
+    // Stale entry with no validators: unconditional refresh still happens.
+    assert_eq!(
+        client
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"plain-2"
+    );
+    let requests = transport.requests.lock().unwrap();
+    assert!(requests[1].validators.is_empty());
+}
+
+#[tokio::test]
+async fn hard_expired_manifest_is_deleted_before_the_miss_is_answered() {
+    let (client, transport, _, clock, store) = manifest_client(
+        vec![
+            response(200, &[("etag", "\"x\"")], "old"),
+            response(200, &[("etag", "\"y\"")], "new"),
+        ],
+        Some("secret"),
+    );
+    let url = manifest_url("o", "r", "main");
+    client
+        .public_manifest_get(url.clone(), |_| true)
+        .await
+        .unwrap();
+    let key = manifest_key(&identity_fingerprint(Some("secret")), "o", "r", "main");
+    clock.advance(HARD_TTL_MS + 1);
+    assert_eq!(
+        client
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"new"
+    );
+    // The expired bucket was deleted, then re-populated by the 200 — and the
+    // request carried no stale validators.
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].validators.is_empty());
+    let entry: ManifestEntry =
+        serde_json::from_value(store.values.lock().unwrap().get(&key).unwrap().clone()).unwrap();
+    assert_eq!(entry.etag.as_deref(), Some("\"y\""));
+}
+
+#[tokio::test]
+async fn manifest_buckets_survive_restart_and_identity_switching() {
+    // Shared backing map = same plugins-cache.json across two client instances.
+    let clock = Arc::new(ManualClock::new(1_000_000));
+    let store = Arc::new(MemoryBackend::default());
+    let ((client, transport, credentials), _) = fixture_with(
+        vec![
+            response(200, &[("etag", "\"A\"")], "token-a-body"),
+            response(200, &[], "{}"), // /user probe for configure_token(B)
+            response(200, &[("etag", "\"B\"")], "token-b-body"),
+            response(200, &[], "{}"), // /user probe for configure_token(A) again
+        ],
+        Some("token-a"),
+        Some(clock.clone()),
+        None,
+    );
+    let client = client.with_manifest_store(store.clone());
+    let url = manifest_url("o", "r", "main");
+    client
+        .public_manifest_get(url.clone(), |_| true)
+        .await
+        .unwrap();
+    // Switch A -> B: B has its own bucket and must not read A's cached body.
+    client
+        .configure_token("token-b".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .public_manifest_get(url.clone(), |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"token-b-body"
+    );
+    // Switch B -> A: A's bucket is still fresh — served with zero requests.
+    client
+        .configure_token("token-a".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .public_manifest_get(url.clone(), |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"token-a-body"
+    );
+    // Anonymous has its own bucket, never A's or B's.
+    let anon_key = manifest_key("anon", "o", "r", "main");
+    assert!(!store.values.lock().unwrap().contains_key(&anon_key));
+    // A's and B's buckets coexist under distinct fingerprints.
+    let keys: Vec<String> = store.values.lock().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys.len(),
+        2,
+        "A and B buckets persist independently: {keys:?}"
+    );
+    assert!(keys.iter().all(|k| !k.contains("token-")));
+    // 4 requests: A manifest, B's /user probe, B manifest, A's second /user probe.
+    // The final A manifest call was a fresh bucket hit with zero traffic.
+    assert_eq!(transport.requests.lock().unwrap().len(), 4);
+    // "Restart": a new client over the same backend still sees the bucket.
+    let ((restarted, transport2, _), _) =
+        fixture_with(Vec::new(), Some("token-a"), Some(clock), None);
+    let restarted = restarted.with_manifest_store(store.clone());
+    assert_eq!(
+        restarted
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"token-a-body"
+    );
+    assert!(transport2.requests.lock().unwrap().is_empty());
+    drop(credentials);
+    drop(transport);
+}
+
+#[tokio::test]
+async fn manifest_401_fallback_rechecks_anon_cache_before_network() {
+    // Token A is stale on the server. The anon bucket for the SAME manifest is
+    // warm: after revoking A, the loop must serve anon's fresh entry rather than
+    // firing a fallback request or reusing A's bucket.
+    let (client, transport, _, clock, store) = manifest_client(
+        vec![response(401, &[], r#"{"message":"bad credentials"}"#)],
+        Some("dead-token"),
+    );
+    let url = manifest_url("o", "r", "main");
+    seed_entry(
+        &store,
+        &manifest_key("anon", "o", "r", "main"),
+        "anon-cached",
+        None,
+        clock.now_ms(),
+    );
+    assert_eq!(
+        client
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"anon-cached"
+    );
+    // One request total: the failed authenticated call. The fallback never hit
+    // the wire — the anon fresh bucket answered first.
+    {
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].token.as_deref(), Some("dead-token"));
+    }
+    // A's bucket was never written from the 401 response.
+    let dead_key = manifest_key(&identity_fingerprint(Some("dead-token")), "o", "r", "main");
+    assert!(!store.values.lock().unwrap().contains_key(&dead_key));
+    assert_eq!(client.session().await.identity, Identity::TokenInvalid);
+}
+
+#[tokio::test]
+async fn startup_prune_drops_expired_and_corrupt_buckets() {
+    let store = MemoryBackend::default();
+    let now = 1_000_000_i64;
+    let live = manifest_key("anon", "o", "live", "main");
+    let stale = manifest_key("anon", "o", "stale", "main");
+    let dead = manifest_key("anon", "o", "dead", "main");
+    let corrupt = manifest_key("anon", "o", "corrupt", "main");
+    let other = "unrelated:key".to_owned();
+    seed_entry(&store, &live, "live", None, now);
+    {
+        let mut values = store.values.lock().unwrap();
+        let headers = HeaderMap::new();
+        let stale_entry = ManifestEntry::new(b"stale", &headers, now - FRESH_TTL_MS - 1);
+        values.insert(stale.clone(), serde_json::to_value(&stale_entry).unwrap());
+        let dead_entry = ManifestEntry::new(b"dead", &headers, now - HARD_TTL_MS - 1);
+        values.insert(dead.clone(), serde_json::to_value(&dead_entry).unwrap());
+        values.insert(corrupt.clone(), serde_json::json!({"not": "an entry"}));
+        values.insert(other.clone(), serde_json::json!({"keep": true}));
+    }
+    prune_expired(&store, now);
+    let keys: Vec<String> = store.values.lock().unwrap().keys().cloned().collect();
+    assert!(keys.contains(&live));
+    assert!(keys.contains(&stale)); // past fresh but inside hard: kept for revalidation
+    assert!(!keys.contains(&dead));
+    // Startup enumeration also removes corrupt values without a later get().
+    assert!(!keys.contains(&corrupt));
+    assert!(keys.contains(&other)); // non-manifest keys are never touched
+}
+
+#[test]
+fn manifest_bounds_reject_oversized_bodies_and_evict_oldest() {
+    let store = MemoryBackend::default();
+    let now = 1_000_000_i64;
+    let headers = HeaderMap::new();
+    // Body bound: oversized entries are never written.
+    let huge = ManifestEntry::new(&vec![0u8; MAX_MANIFEST_BYTES + 1], &headers, now);
+    manifest_put(&store, "manifest:v1:anon:o:r:huge", &huge);
+    assert!(store.values.lock().unwrap().is_empty());
+    // Entry bound: at capacity the oldest-validated bucket is evicted.
+    for index in 0..MAX_MANIFEST_ENTRIES {
+        let entry = ManifestEntry::new(
+            b"x",
+            &headers,
+            now - MAX_MANIFEST_ENTRIES as i64 + index as i64,
+        );
+        store.set(
+            &manifest_key("anon", "o", "r", &format!("b{index}")),
+            &entry,
+        );
+    }
+    let fresh_entry = ManifestEntry::new(b"new", &headers, now + 1);
+    manifest_put(
+        &store,
+        &manifest_key("anon", "o", "r", "newest"),
+        &fresh_entry,
+    );
+    let keys: Vec<String> = store.values.lock().unwrap().keys().cloned().collect();
+    assert_eq!(keys.len(), MAX_MANIFEST_ENTRIES);
+    assert!(!keys.contains(&manifest_key("anon", "o", "r", "b0")));
+    assert!(keys.contains(&manifest_key("anon", "o", "r", "newest")));
+}
+
+#[tokio::test]
+async fn backend_failure_and_corruption_degrade_to_network_misses() {
+    // A store that fails every call must not break or poison the API path.
+    let (client, transport, _, _, store) = manifest_client(
+        vec![response(200, &[("etag", "\"v\"")], "net-body")],
+        Some("secret"),
+    );
+    store.unavailable.store(true, Ordering::SeqCst);
+    let url = manifest_url("o", "r", "main");
+    assert_eq!(
+        client
+            .public_manifest_get(url.clone(), |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"net-body"
+    );
+    store.unavailable.store(false, Ordering::SeqCst);
+    // A corrupt bucket is dropped and refetched, never served.
+    let key = manifest_key(&identity_fingerprint(Some("secret")), "o", "r", "main");
+    store
+        .values
+        .lock()
+        .unwrap()
+        .insert(key.clone(), serde_json::json!({"body": 12345}));
+    transport
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(response(200, &[("etag", "\"v\"")], "net-body"));
+    assert_eq!(
+        client
+            .public_manifest_get(url, |_| true)
+            .await
+            .unwrap()
+            .body,
+        b"net-body"
+    );
+    assert_eq!(transport.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn manifest_lookup_hard_expiry_deletes_before_reporting_miss() {
+    let store = MemoryBackend::default();
+    let now = 1_000_000_i64;
+    let key = manifest_key("anon", "o", "r", "main");
+    seed_entry(&store, &key, "x", Some("\"t\""), now);
+    match manifest_lookup(&store, &key, now + FRESH_TTL_MS).unwrap() {
+        ManifestHit::Stale(entry) => assert_eq!(entry.etag.as_deref(), Some("\"t\"")),
+        ManifestHit::Fresh(_) => panic!("stale window must revalidate"),
+    }
+    assert!(manifest_lookup(&store, &key, now + HARD_TTL_MS).is_none());
+    assert!(!store.values.lock().unwrap().contains_key(&key));
+}
+
+#[tokio::test]
+async fn non_manifest_apis_ignore_the_manifest_store() {
+    // Generic /user, /search and archive calls keep their in-memory-cache-only
+    // behavior: they never read or write manifest buckets.
+    let (client, transport, _, _, store) = manifest_client(
+        vec![
+            response(200, &[("etag", "\"s\"")], &search_body(1)),
+            response(200, &[("etag", "\"u\"")], "{}"),
+        ],
+        Some("secret"),
+    );
+    client.public_get(endpoint()).await.unwrap();
+    client
+        .public_get(api_url(&["user"], &[]).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(transport.requests.lock().unwrap().len(), 2);
+    assert!(store.values.lock().unwrap().is_empty());
+    // A URL that merely resembles a manifest is rejected by the manifest path.
+    let not_manifest = api_url(
+        &["repos", "o", "r", "contents", "other.json"],
+        &[("ref", "m")],
+    )
+    .unwrap();
+    assert!(client
+        .public_manifest_get(not_manifest, |_| true)
+        .await
+        .is_err());
+    assert_eq!(transport.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn invalid_manifest_body_is_evicted_and_never_replayed() {
+    // The commands-layer parser validates the body under the session lock before
+    // persistence: invalid envelopes and manifests must never land in the store.
+    let (client, transport, _, clock, store) = manifest_client(
+        vec![
+            response(200, &[], &search_body(1)),
+            response(200, &[("etag", "\"bad\"")], "this is not a manifest"),
+            response(200, &[], &search_body(1)),
+            response(
+                200,
+                &[("etag", "\"good\"")],
+                r#"{"encoding":"base64","content":"eyJwcm90b2NvbFZlcnNpb24iOiIxIiwibmFtZSI6IngiLCJ2ZXJzaW9uIjoiMSIsImRlc2NyaXB0aW9uIjoiZCIsImF1dGhvciI6ImEiLCJlbnRyeSI6Im1haW4ucHkiLCJydW50aW1lIjoicHl0aG9uIiwiY2FwYWJpbGl0aWVzIjpbXX0="}"#,
+            ),
+        ],
+        None,
+    );
+    let first = crate::commands::github_plugins::discover(&client, 1, 20, &[])
+        .await
+        .unwrap();
+    assert!(first.plugins[0].manifest.is_none());
+    assert!(first.plugins[0].manifest_error.is_some());
+    // The invalid 200 was never persisted — no bucket exists for anon.
+    assert!(store.values.lock().unwrap().is_empty());
+    // The second discovery must clear the 6-second anonymous search pacing window.
+    clock.advance(6_001);
+    let second = crate::commands::github_plugins::discover(&client, 1, 20, &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        second.plugins[0].manifest.as_ref().map(|m| m.name.as_str()),
+        Some("x")
+    );
+    // The missing bucket forced a fresh manifest request for the second pass.
+    assert_eq!(transport.requests.lock().unwrap().len(), 4);
 }

@@ -26,6 +26,7 @@
 |---|---|---|
 | `commands/` | `settings.rs` `library.rs` `formats.rs` `plugins.rs` | 14 个 `#[tauri::command]` 薄壳，委托给核心层；阻塞调用已包 `spawn_blocking` |
 | `core/` | `settings.rs` `library.rs` `mp4.rs` `tools.rs` | 设置持久化、媒体库 CRUD、MP4 元数据降级解析、FFmpeg/FFprobe 路径解析 |
+| `core/github/` | `mod.rs` `manifest_cache.rs` | GitHub 共享会话、凭据与分桶限流；`plugins-cache.json` 中按身份隔离持久化 manifest（1 小时软过期 / 30 天硬过期 / ETag 重验证），启动清理；详见 [GitHub API 文档](github-api.md) |
 | `formats/` | `mod.rs` | `video.txt`（OGM）/ `video.csv`（PR 标记）/ `video.xml`（FCP7）生成器 + golden file 测试 |
 | `ffmpeg/` | `mod.rs` | `export_segments`：流复制 `-c copy` 导出片段 |
 | `plugins/` | `manifest.rs` `manager.rs` `protocol.rs` `runtime.rs` | 插件清单校验、进程生命周期管理、JSON-RPC 协议、Sidecar spawn/stdio 通信 |
