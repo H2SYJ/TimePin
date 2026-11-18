@@ -27,10 +27,12 @@ describe('advanced settings IPC contract', () => {
   });
 
   it('preserves picker cancellation and returns selected files and directories', async () => {
-    vi.mocked(open).mockResolvedValueOnce(null).mockResolvedValueOnce('D:/plugins').mockResolvedValueOnce('D:/ffmpeg.exe');
+    vi.mocked(open).mockResolvedValueOnce(null).mockResolvedValueOnce('D:/plugins').mockResolvedValueOnce('D:/export').mockResolvedValueOnce('D:/ffmpeg.exe');
     expect(await api.pickExecutable('ffprobe')).toBeNull();
     expect(await api.pickDirectory()).toBe('D:/plugins');
-    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false }));
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false, title: '选择插件搜索目录' }));
+    expect(await api.pickDirectory('选择导出目录')).toBe('D:/export');
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true, multiple: false, title: '选择导出目录' }));
     expect(await api.pickExecutable('ffmpeg')).toBe('D:/ffmpeg.exe');
     expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ multiple: false }));
   });

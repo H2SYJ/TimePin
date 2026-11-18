@@ -48,7 +48,8 @@ src/
 │   │   ├── LibraryPage.tsx    ← 媒体库页（拖拽/选择导入 + 视频列表）
 │   │   ├── PluginsPage.tsx    ← 插件管理页（列表 + 运行 + 日志）
 │   │   ├── VideoCard.tsx      ← memo 包装，lazy 缩略图
-│   │   └── VideoDetail.tsx    ← 选中视频详情 + 打点 + 导出
+│   │   └── VideoDetail.tsx    ← 选中视频详情 + 进入标注工作台
+│   ├── marks/                ← 标注工作台、区间选择与片段导出
 │   └── settings/
 │       └── SettingsPage.tsx   ← 设置页（完整表单）
 ├── hooks/useKeyboardShortcuts.ts
@@ -92,10 +93,14 @@ PluginsPage 选插件+视频 → invoke("run_plugin") → spawn_blocking →
 ### 4.3 导出
 
 ```
-VideoDetail 选区间 → invoke("export_segments") → spawn_blocking →
+MarksPage 勾选有效区间 → Tauri 选择输出目录 → invoke("export_segments") → spawn_blocking →
   ffmpeg/mod.rs → 每段 Command::new(ffmpeg).args(-ss -t -c copy).output()
-→ 返回 Vec<PathBuf>
+→ 返回 Vec<PathBuf> → 工作台展示实际输出文件路径
 ```
+
+导出模式复用 `settings.defaultExportMode`；帧精确模式目前明确拒绝，不进行全量重编码。
+前端显示导出中禁用态（`ExportProgressEvent` 尚未 emit），失败保留选择便于重试。
+选择/输出目录不新增持久化配置，详细行为与覆盖、部分失败限制见 [手动标注文档](manual-marks.md#从标注工作台导出片段)。
 
 ## 5. 插件生命周期
 

@@ -97,9 +97,9 @@ export const api = {
     return tauriInvoke<void>('open_plugin_directory', { index });
   },
 
-  async pickDirectory(): Promise<string | null> {
+  async pickDirectory(title = '选择插件搜索目录'): Promise<string | null> {
     if (!isTauri()) throw new Error('目录选择需要在 TimePin 桌面应用中运行');
-    const selected = await open({ directory: true, multiple: false, title: '选择插件搜索目录' });
+    const selected = await open({ directory: true, multiple: false, title });
     return Array.isArray(selected) ? selected[0] ?? null : selected;
   },
 
